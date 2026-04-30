@@ -1,0 +1,303 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url     = env("DATABASE_URL")
+}
+
+// ==========================================
+// 1. CATÁLOGOS Y E-COMMERCE
+// ==========================================
+
+model Almacen {
+  id     Int            @id @default(autoincrement())
+  nombre String
+  tipo   String         // 'Principal', 'Remate', 'Web'
+  stock  StockPrenda[]
+}
+
+model Color {
+  id          Int      @id @default(autoincrement())
+  nombre      String   @unique
+  codigo      String   @unique @default("XXX")
+  codigoHex   String?
+  
+  detallesMatriz OrdenDetalleMatriz[]
+  guiaDetalles   GuiaDetalle[]
+  stock          StockPrenda[]
+}
+
+model Talla {
+  id     Int    @id @default(autoincrement())
+  nombre String // 'S', 'M', '30'
+  
+  detallesMatriz OrdenDetalleMatriz[]
+  guiaDetalles   GuiaDetalle[]
+  stock          StockPrenda[]
+}
+
+model Producto {
+  id          Int     @id @default(autoincrement())
+  skuBase     String  @unique // 'JEAN-SLIM-001'
+  nombre      String
+  categoria   String?
+
+  imagenLocal    String?
+  
+  // PREPARACIÓN PARA E-COMMERCE (Página Web)
+  publicadoWeb Boolean @default(false)
+  descripcionWeb String?
+  imagenUrl      String?
+
+  boms        ProductoBom[]
+  ordenes     OrdenProduccion[]
+  stock       StockPrenda[]
+
+  rutasBase      ProductoRuta[]
+  inventarios InventarioTerminado[]
+}
+
+model Insumo {
+  id              Int     @id @default(autoincrement())
+  codigo          String  @unique
+  nombre          String
+  tipo            String  // 'Tela', 'Avio', 'Empaque'
+  unidadMedida    String
+  costoUnitario   Decimal @default(0.0000)
+  stockActual     Decimal @default(0.00)
+  
+  boms            ProductoBom[]
+}
+
+model ProveedorTaller {
+  id          Int      @id @default(autoincrement())
+  razonSocial String
+  tipo        String   // 'Taller Confeccion', 'Lavanderia'
+  telefono    String?
+
+  rutas       OrdenRutaServicio[]
+  guias       GuiaServicio[]
+  memos       MemoIncidencia[]
+}
+
+// ==========================================
+// 2. FICHA TÉCNICA (BOM)
+// ==========================================
+
+model ProductoBom {
+  id               Int      @id @default(autoincrement())
+  cantidadRequerida Decimal
+  mermaEstimadaPct  Decimal  @default(0.00)
+
+  productoId       Int
+  producto         Producto @relation(fields: [productoId], references: [id], onDelete: Cascade)
+  
+  insumoId         Int
+  insumo           Insumo   @relation(fields: [insumoId], references: [id], onDelete: Restrict)
+}
+
+// ==========================================
+// 3. PRODUCCIÓN Y COSTOS
+// ==========================================
+
+model OrdenProduccion {
+  id               Int               @id @default(autoincrement())
+  codigoOp         String            @unique
+  fechaInicio      DateTime          @default(now())
+  estado           String            @default("Pendiente")
+
+  productoId       Int
+  producto         Producto          @relation(fields: [productoId], references: [id])
+
+  detallesMatriz   OrdenDetalleMatriz[]
+  rutas            OrdenRutaServicio[]
+  guias            GuiaServicio[]
+  memos            MemoIncidencia[]
+  costeoFinal      OrdenCosteoFinal?
+  
+  // EL NUEVO ENCHUFE: Conecta la orden con sus gastos de Ploteo, Traslado, etc.
+  gastosCif        OrdenGastoCif[]
+}
+
+model OrdenDetalleMatriz {
+  id                  Int     @id @default(autoincrement())
+  cantidadProgramada  Int
+  cantidadEtiquetada1 Int     @default(0)
+  cantidadEtiquetada2 Int     @default(0)
+
+  ordenId             Int
+  orden               OrdenProduccion @relation(fields: [ordenId], references: [id], onDelete: Cascade)
+  
+  colorId             Int
+  color               Color   @relation(fields: [colorId], references: [id])
+  
+  tallaId             Int
+  talla               Talla   @relation(fields: [tallaId], references: [id])
+}
+
+model OrdenRutaServicio {
+  id                  Int     @id @default(autoincrement())
+  tipoServicio        String  // 'Corte', 'Confeccion'
+  ordenSecuencia      Int
+  costoUnitarioPactado Decimal
+  estado              String  @default("Pendiente")
+
+  ordenId             Int
+  orden               OrdenProduccion @relation(fields: [ordenId], references: [id], onDelete: Cascade)
+  
+  tallerId            Int
+  taller              ProveedorTaller @relation(fields: [tallerId], references: [id])
+}
+
+model ProductoRuta {
+  id             Int      @id @default(autoincrement())
+  tipoServicio   String   // 'Corte', 'Confeccion', 'Lavanderia', 'Ojal', etc.
+  ordenSecuencia Int      // El orden cronológico (1, 2, 3...)
+
+  productoId     Int
+  producto       Producto @relation(fields: [productoId], references: [id], onDelete: Cascade)
+}
+
+// ==========================================
+// 4. LOGÍSTICA, CALIDAD Y STOCK FINAL
+// ==========================================
+
+model GuiaServicio {
+  id          Int      @id @default(autoincrement())
+  correlativo String   @unique
+  tipoGuia    String   // 'Salida', 'Retorno'
+  estado      String   @default("En Transito")
+
+  ordenId     Int
+  orden       OrdenProduccion @relation(fields: [ordenId], references: [id])
+  
+  tallerId    Int
+  taller      ProveedorTaller @relation(fields: [tallerId], references: [id])
+
+  detalles    GuiaDetalle[]
+}
+
+model GuiaDetalle {
+  id              Int @id @default(autoincrement())
+  cantidadEnviada Int @default(0)
+  cantidadRecibida Int @default(0)
+  cantidadFalla   Int @default(0)
+
+  guiaId          Int
+  guia            GuiaServicio @relation(fields: [guiaId], references: [id], onDelete: Cascade)
+  
+  colorId         Int
+  color           Color @relation(fields: [colorId], references: [id])
+  
+  tallaId         Int
+  talla           Talla @relation(fields: [tallaId], references: [id])
+}
+
+model MemoIncidencia {
+  id                  Int      @id @default(autoincrement())
+  correlativo         String   @unique
+  tipoFalla           String
+  cantidadAfectada    Int
+  costoTotalPerdida   Decimal
+  responsablePago     String
+  estado              String   @default("Pendiente Descuento")
+
+  ordenId             Int
+  orden               OrdenProduccion @relation(fields: [ordenId], references: [id])
+  
+  tallerId            Int
+  taller              ProveedorTaller @relation(fields: [tallerId], references: [id])
+}
+
+model StockPrenda {
+  id         Int    @id @default(autoincrement())
+  skuBarras  String @unique // Lo que escaneas para vender
+  cantidad   Int    @default(0)
+
+  productoId Int
+  producto   Producto @relation(fields: [productoId], references: [id])
+  
+  colorId    Int
+  color      Color @relation(fields: [colorId], references: [id])
+  
+  tallaId    Int
+  talla      Talla @relation(fields: [tallaId], references: [id])
+  
+  almacenId  Int
+  almacen    Almacen @relation(fields: [almacenId], references: [id])
+}
+
+model OrdenCosteoFinal {
+  id                   Int     @id @default(autoincrement())
+  loteProducidoReal    Int
+  costoTotalUnitarioNeto Decimal
+  
+  margenMayorista      Decimal @default(0.35)
+  precioMayorista      Decimal
+  margenMinorista      Decimal @default(0.70)
+  precioMinorista      Decimal // ¡ESTE ES EL QUE LEERÁ TU PÁGINA WEB!
+
+  ordenId              Int     @unique
+  orden                OrdenProduccion @relation(fields: [ordenId], references: [id])
+}
+
+model Usuario {
+  id       Int     @id @default(autoincrement())
+  email    String  @unique
+  password String
+  nombre   String
+  rol      String  @default("USER") // "ADMIN" o "USER"
+  logs     Auditoria[]
+}
+
+model Auditoria {
+  id          Int      @id @default(autoincrement())
+  accion      String   // 'CREAR_ORDEN', 'REGISTRAR_VENTA', etc.
+  tabla       String   // 'OrdenProduccion', 'Venta'
+  registroId  Int
+  detalles    String?  @db.Text
+  fecha       DateTime @default(now())
+  
+  usuarioId   Int
+  usuario     Usuario  @relation(fields: [usuarioId], references: [id])
+}
+
+// ==========================================
+// 5. COSTOS INDIRECTOS DE FABRICACIÓN (CIF)
+// ==========================================
+
+model OrdenGastoCif {
+  id          Int             @id @default(autoincrement())
+  concepto    String          // Ej: 'Ploteo', 'Traslado', 'Patronista'
+  costoTotal  Decimal         // El costo global sin IGV por todo el lote
+
+  ordenId     Int
+  orden       OrdenProduccion @relation(fields: [ordenId], references: [id], onDelete: Cascade)
+}
+
+model Bodega {
+  id          Int      @id @default(autoincrement())
+  nombre      String   // Ej: "Almacén Principal", "Tienda Lima", "Zona Fallados"
+  tipo        String   // Ej: "Principal", "Sucursal", "Merma"
+  direccion   String?
+  estado      Boolean  @default(true)
+  
+  inventarios InventarioTerminado[]
+}
+
+model InventarioTerminado {
+  id          Int      @id @default(autoincrement())
+  productoId  Int
+  bodegaId    Int
+  color       String   
+  talla       String   
+  stock       Int      @default(0) 
+  
+  producto    Producto @relation(fields: [productoId], references: [id])
+  bodega      Bodega   @relation(fields: [bodegaId], references: [id])
+
+  // Esta regla evita que se creen dos filas iguales para el mismo pantalón en la misma tienda
+  @@unique([productoId, bodegaId, color, talla]) 
+}
