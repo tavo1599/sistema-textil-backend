@@ -11,6 +11,7 @@ export class OrdenesService {
   async create(dto: any) { 
     return this.prisma.$transaction(async (tx) => {
       
+      // 1. Crear la cabecera de la OP y sus rutas/gastos
       const orden = await tx.ordenProduccion.create({
         data: {
           codigoOp: dto.codigoOp,
@@ -33,22 +34,27 @@ export class OrdenesService {
         },
       });
 
+      // 2. Filtrar la matriz (solo guardar las tallas mayores a 0)
+      const matrizValida = Object.entries(dto.matriz).filter(([_, cant]) => Number(cant) > 0);
       let totalPrendasAFabricar = 0;
-      const detallesPromesas = Object.entries(dto.matriz).map(([key, cant]) => {
+
+      // 3. Preparar la data para guardar masivamente (Más rápido)
+const detallesData: any[] = matrizValida.map(([key, cant]) => { // <-- Agregamos : any[] aquí
         const [colorNombre, tallaNombre] = key.split('-');
         totalPrendasAFabricar += Number(cant);
         
-        return tx.ordenDetalleMatriz.create({
-          data: {
-            ordenId: orden.id,
-            colorId: 1, // Recuerda luego mapear el ID real del color
-            tallaId: 1, // Recuerda luego mapear el ID real de la talla
-            cantidadProgramada: Number(cant),
-          },
-        });
+        return {
+          ordenId: orden.id,
+          color: colorNombre,  // String
+          talla: tallaNombre,  // String
+          cantidadProgramada: Number(cant),
+        };
       });
-      await Promise.all(detallesPromesas);
 
+      // Guardar todo de golpe
+      await tx.ordenDetalleMatriz.createMany({ data: detallesData });
+
+      // 4. Extraer Ficha Técnica y descontar stock
       const receta = await tx.productoBom.findMany({
         where: { productoId: dto.productoId },
         include: { insumo: true }
@@ -78,14 +84,15 @@ export class OrdenesService {
         });
       }
 
+      // 5. Cálculos Financieros
       const costoServiciosUnitario = dto.servicios.reduce((sum, s) => sum + Number(s.costoPactado), 0);
       const totalGastoCif = dto.cif.reduce((sum, c) => sum + Number(c.costoTotal), 0);
       const cifUnitario = totalGastoCif / totalPrendasAFabricar;
 
       const costoFinalNetoUnitario = costoTotalInsumosPorPrenda + costoServiciosUnitario + cifUnitario;
 
-      // --- AQUÍ EMPIEZA LA LÓGICA COMERCIAL (MODIFICADA) ---
-      const igvFactor = 1.18; // 18% de IGV
+      // Lógica Comercial
+      const igvFactor = 1.18; 
       const precioMayoristaNeto = costoFinalNetoUnitario * 1.35;
       const precioMinoristaNeto = costoFinalNetoUnitario * 1.70;
 
@@ -105,7 +112,6 @@ export class OrdenesService {
         codigo: orden.codigoOp,
         costoUnitario: costoFinalNetoUnitario,
         totalInversion: costoFinalNetoUnitario * totalPrendasAFabricar,
-        // ENVIAMOS EL PAQUETE COMERCIAL AL FRONTEND
         comercial: {
           mayoristaNeto: precioMayoristaNeto,
           mayoristaConIgv: precioMayoristaNeto * igvFactor,
@@ -114,7 +120,6 @@ export class OrdenesService {
           igvMontoMayorista: precioMayoristaNeto * 0.18
         }
       };
-      // --- FIN DE LA LÓGICA COMERCIAL ---
     });
   }
 
@@ -148,6 +153,82 @@ export class OrdenesService {
         gastosCif: true,
         costeoFinal: true
       }
+    });
+  }
+
+  // ====================================================================
+  // 4. ACTUALIZAR ESTADO (MAGIA LOGÍSTICA DE ERP)
+  // ====================================================================
+  async actualizarEstado(id: number, estado: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const orden = await tx.ordenProduccion.findUnique({
+        where: { id },
+        include: { detallesMatriz: true }
+      });
+
+      if (!orden) throw new BadRequestException('Orden no encontrada');
+      if (orden.estado === estado) return orden; 
+
+      // 🔴 CASO 1: ANULAR ORDEN -> DEVOLVER INSUMOS A ALMACÉN
+      if (orden.estado === 'En Proceso' && estado === 'Anulada') {
+        const totalPrendas = orden.detallesMatriz.reduce((sum, d) => sum + Number(d.cantidadProgramada), 0);
+        
+        const receta = await tx.productoBom.findMany({
+          where: { productoId: orden.productoId }
+        });
+
+        for (const item of receta) {
+          const consumoPorPrenda = Number(item.cantidadRequerida) * (1 + (Number(item.mermaEstimadaPct || 0) / 100));
+          const totalDevolver = consumoPorPrenda * totalPrendas;
+
+          await tx.insumo.update({
+            where: { id: item.insumoId },
+            data: { stockActual: { increment: totalDevolver } }
+          });
+        }
+      }
+
+      // 🟢 CASO 2: TERMINAR ORDEN -> INGRESAR PRODUCTOS TERMINADOS
+      if (orden.estado === 'En Proceso' && estado === 'Terminada') {
+        
+        // Buscamos la primera bodega activa que exista en tu sistema
+        const bodegaPrincipal = await tx.bodega.findFirst({
+          where: { estado: true }
+        });
+
+        if (!bodegaPrincipal) {
+          throw new BadRequestException('No se encontró ninguna Bodega activa para guardar los productos. Crea una bodega primero.');
+        }
+
+        for (const detalle of orden.detallesMatriz) {
+          await tx.inventarioTerminado.upsert({
+            where: { 
+              productoId_bodegaId_color_talla: {
+                productoId: orden.productoId,
+                bodegaId: bodegaPrincipal.id, // <-- ¡Ahora es dinámico!
+                color: (detalle as any).color, 
+                talla: (detalle as any).talla  
+              }
+            },
+            update: {
+              stock: { increment: Number(detalle.cantidadProgramada) }
+            },
+            create: {
+              productoId: orden.productoId,
+              bodegaId: bodegaPrincipal.id, // <-- ¡Ahora es dinámico!
+              color: (detalle as any).color,
+              talla: (detalle as any).talla,
+              stock: Number(detalle.cantidadProgramada)
+            }
+          });
+        }
+      }
+
+      // Actualizamos el estado visual en la DB
+      return tx.ordenProduccion.update({
+        where: { id },
+        data: { estado }
+      });
     });
   }
 }

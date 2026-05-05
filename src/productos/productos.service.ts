@@ -52,6 +52,29 @@ export class ProductosService {
     });
   }
 
+  // Actualizar un producto
+  async update(id: number, data: any) {
+    return this.prisma.producto.update({
+      where: { id },
+      data: {
+        skuBase: data.skuBase,
+        nombre: data.nombre,
+        categoria: data.categoria,
+      },
+    });
+  }
+
+  async remove(id: number) {
+    try {
+      return await this.prisma.producto.delete({
+        where: { id },
+      });
+    } catch (error) {
+      console.error("Error al eliminar producto:", error);
+      throw error;
+    }
+  }
+
   async findAll() {
     return this.prisma.producto.findMany({ orderBy: { id: 'desc' } });
   }

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, UseGuards, Delete, Put } from '@nestjs/common';
 import { ProductosService } from './productos.service';
 import { CreateProductoDto } from './dto/create-producto.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -22,6 +22,16 @@ export class ProductosController {
   ) {
     // Le pasamos el paquete completo al servicio para que él lo procese
     return this.productosService.saveFichaTecnica(+id, data);
+  }
+
+  @Put(':id')
+  update(@Param('id') id: string, @Body() body: any) {
+    return this.productosService.update(+id, body);
+  }
+
+  @Delete(':id')
+  remove(@Param('id') id: string) {
+    return this.productosService.remove(+id); // El símbolo + convierte el string a número
   }
 
   // 3. Listar todos los productos (Para los selects de Vue)

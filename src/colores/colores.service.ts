@@ -23,6 +23,24 @@ export class ColoresService {
     });
   }
 
+  // Actualizar un color
+  async update(id: number, data: { nombre: string; codigo: string; codigoHex?: string }) {
+    return this.prisma.color.update({
+      where: { id },
+      data: {
+        nombre: data.nombre,
+        codigo: data.codigo.toUpperCase(),
+        codigoHex: data.codigoHex,
+      },
+    });
+  }
+
+  // Eliminar un color
+  async remove(id: number) {
+    // Nota: Si el color ya tiene prendas en stock, Prisma bloqueará la eliminación para proteger tus datos.
+    return this.prisma.color.delete({ where: { id } });
+  }
+
   // Buscar un color por ID (útil para validaciones)
   async findOne(id: number) {
     return this.prisma.color.findUnique({ where: { id } });

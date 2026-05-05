@@ -6,8 +6,8 @@ export class CreateGuiaDto {
   
   // Lo que va en los sacos
   detalles!: {
-    colorId: number;
-    tallaId: number;
+    color: string;
+    talla: string;
     cantidadEnviada: number;
   }[];
 }

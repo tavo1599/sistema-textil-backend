@@ -1,7 +1,7 @@
 export class CreateStockDto {
   productoId!: number;
-  colorId!: number;
-  tallaId!: number;
+  color!: string;
+  talla!: string;
   almacenId!: number;
   cantidad!: number;
 }

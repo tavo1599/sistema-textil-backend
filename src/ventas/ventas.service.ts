@@ -9,40 +9,72 @@ export class VentasService {
   async registrarVenta(dto: CreateVentaDto) {
     return this.prisma.$transaction(async (tx) => {
       let totalVenta = 0;
+      let totalPrendasVendidas = 0;
 
+      // 1 y 2. Verificar y Descontar Stock en la tabla correcta
       for (const item of dto.detalles) {
-        // 1. Verificar si hay stock suficiente
-        const stock = await tx.stockPrenda.findFirst({
+        // 🔍 Buscamos en 'inventarioTerminado' que es donde el Ingreso Libre guarda el stock
+        const registroStock = await tx.inventarioTerminado.findFirst({
           where: {
-            productoId: item.productoId,
-            colorId: item.colorId,
-            tallaId: item.tallaId,
-            almacenId: dto.almacenId
+            productoId: Number(item.productoId),
+            color: String(item.color),
+            talla: String(item.talla),
+            bodegaId: Number(dto.almacenId) // En Prisma es 'bodegaId'
           }
         });
 
-        if (!stock || stock.cantidad < item.cantidad) {
-          throw new BadRequestException(`Stock insuficiente para el producto ID ${item.productoId}`);
+        // Validamos si existe el registro y si hay suficiente stock
+        if (!registroStock || registroStock.stock < item.cantidad) {
+          throw new BadRequestException(
+            `Stock insuficiente para el producto ID ${item.productoId} (${item.color} - Talla ${item.talla}) en esta bodega.`
+          );
         }
 
-        // 2. Descontar del stock
-        await tx.stockPrenda.update({
-          where: { id: stock.id },
-          data: { cantidad: stock.cantidad - item.cantidad }
+        // 📉 Actualizamos la cantidad restando la venta
+        await tx.inventarioTerminado.update({
+          where: { id: registroStock.id },
+          data: { 
+            stock: registroStock.stock - Number(item.cantidad) 
+          }
         });
 
-        totalVenta += item.cantidad * item.precioUnitario;
+        totalVenta += Number(item.cantidad) * Number(item.precioUnitario);
+        totalPrendasVendidas += Number(item.cantidad);
       }
 
-      // 3. Registrar la venta en una tabla de Historial (puedes crearla en el schema luego)
-      // Por ahora devolvemos el resumen financiero
+      // 3. ¡EL ENCHUFE CON LOGÍSTICA! 🚚
+      if (dto.requiereEnvio) {
+        const codigoGuiaGenerado = `GR-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+        await tx.despachoVenta.create({
+          data: {
+            codigoGuia: codigoGuiaGenerado,
+            cliente: dto.clienteNombre || 'Cliente de Mostrador',
+            destino: dto.destinoEnvio || 'Recojo en Tienda',
+            prendas: totalPrendasVendidas,
+            estado: 'Listo para Empaque'
+          }
+        });
+      }
+
+      
+
+      // 4. Retornar el resumen financiero al Frontend
       return {
-        mensaje: "Venta realizada con éxito",
-        cliente: dto.clienteNombre,
-        canal: dto.tipoVenta,
+        mensaje: dto.requiereEnvio 
+          ? "Venta registrada y enviada a Despachos 🚚" 
+          : "Venta realizada con éxito ✅",
+        cliente: dto.clienteNombre || 'Cliente de Mostrador',
         totalCobrado: totalVenta.toFixed(2),
         fecha: new Date()
       };
     });
   }
+
+  async obtenerDespachosPendientes() {
+  return this.prisma.despachoVenta.findMany({
+    orderBy: { fecha: 'desc' },
+    // Podrías filtrar por estado: where: { estado: 'Listo para Empaque' }
+  });
+}
 }

@@ -23,19 +23,11 @@ model Color {
   nombre      String   @unique
   codigo      String   @unique @default("XXX")
   codigoHex   String?
-  
-  detallesMatriz OrdenDetalleMatriz[]
-  guiaDetalles   GuiaDetalle[]
-  stock          StockPrenda[]
 }
 
 model Talla {
   id     Int    @id @default(autoincrement())
   nombre String // 'S', 'M', '30'
-  
-  detallesMatriz OrdenDetalleMatriz[]
-  guiaDetalles   GuiaDetalle[]
-  stock          StockPrenda[]
 }
 
 model Producto {
@@ -109,7 +101,7 @@ model OrdenProduccion {
   estado           String            @default("Pendiente")
 
   productoId       Int
-  producto         Producto          @relation(fields: [productoId], references: [id])
+  producto    Producto @relation(fields: [productoId], references: [id], onDelete: Cascade)
 
   detallesMatriz   OrdenDetalleMatriz[]
   rutas            OrdenRutaServicio[]
@@ -130,11 +122,8 @@ model OrdenDetalleMatriz {
   ordenId             Int
   orden               OrdenProduccion @relation(fields: [ordenId], references: [id], onDelete: Cascade)
   
-  colorId             Int
-  color               Color   @relation(fields: [colorId], references: [id])
-  
-  tallaId             Int
-  talla               Talla   @relation(fields: [tallaId], references: [id])
+  color               String @default("N/A")
+  talla               String @default("N/A")
 }
 
 model OrdenRutaServicio {
@@ -180,19 +169,17 @@ model GuiaServicio {
 }
 
 model GuiaDetalle {
-  id              Int @id @default(autoincrement())
-  cantidadEnviada Int @default(0)
-  cantidadRecibida Int @default(0)
-  cantidadFalla   Int @default(0)
+  id               Int          @id @default(autoincrement())
+  cantidadEnviada  Int          @default(0)
+  cantidadRecibida Int          @default(0)
+  cantidadFalla    Int          @default(0)
 
-  guiaId          Int
-  guia            GuiaServicio @relation(fields: [guiaId], references: [id], onDelete: Cascade)
+  guiaId           Int
+  guia             GuiaServicio @relation(fields: [guiaId], references: [id], onDelete: Cascade)
   
-  colorId         Int
-  color           Color @relation(fields: [colorId], references: [id])
-  
-  tallaId         Int
-  talla           Talla @relation(fields: [tallaId], references: [id])
+  // Mismo idioma: Strings en lugar de IDs
+  color            String @default("N/A")
+  talla            String @default("N/A")
 }
 
 model MemoIncidencia {
@@ -212,21 +199,21 @@ model MemoIncidencia {
 }
 
 model StockPrenda {
-  id         Int    @id @default(autoincrement())
-  skuBarras  String @unique // Lo que escaneas para vender
-  cantidad   Int    @default(0)
+  id         Int      @id @default(autoincrement())
+  skuBarras  String   @unique // Lo que escaneas para vender
+  cantidad   Int      @default(0)
 
   productoId Int
   producto   Producto @relation(fields: [productoId], references: [id])
   
-  colorId    Int
-  color      Color @relation(fields: [colorId], references: [id])
+  // Cambiamos de Int a String y quitamos la relación forzada con la tabla
+  color      String @default("N/A")  
   
-  tallaId    Int
-  talla      Talla @relation(fields: [tallaId], references: [id])
+  // Cambiamos de Int a String y quitamos la relación forzada con la tabla
+  talla      String @default("N/A")
   
   almacenId  Int
-  almacen    Almacen @relation(fields: [almacenId], references: [id])
+  almacen    Almacen  @relation(fields: [almacenId], references: [id])
 }
 
 model OrdenCosteoFinal {
@@ -300,4 +287,18 @@ model InventarioTerminado {
 
   // Esta regla evita que se creen dos filas iguales para el mismo pantalón en la misma tienda
   @@unique([productoId, bodegaId, color, talla]) 
+}
+
+// ==========================================
+// 6. DESPACHOS Y VENTAS (LOGÍSTICA DE SALIDA)
+// ==========================================
+
+model DespachoVenta {
+  id          Int      @id @default(autoincrement())
+  codigoGuia  String   @unique  // Ej: 'GR-2026-001'
+  cliente     String            // Nombre de la tienda o mayorista
+  destino     String            // Dirección de entrega
+  prendas     Int               // Cantidad total de ropa a enviar
+  estado      String   @default("Listo para Empaque") // 'Listo para Empaque', 'En Tránsito'
+  fecha       DateTime @default(now())
 }

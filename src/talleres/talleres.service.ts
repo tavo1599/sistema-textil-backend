@@ -24,4 +24,23 @@ export class TalleresService {
   async findAll() {
     return this.prisma.proveedorTaller.findMany();
   }
+
+  // FUNCIÓN PARA ACTUALIZAR (NUEVO)
+  async update(id: number, data: any) {
+    return this.prisma.proveedorTaller.update({
+      where: { id },
+      data: {
+        razonSocial: data.razonSocial,
+        tipo: data.tipo,
+        telefono: data.telefono,
+      },
+    });
+  }
+
+  // FUNCIÓN PARA ELIMINAR (NUEVO)
+  async remove(id: number) {
+    return this.prisma.proveedorTaller.delete({
+      where: { id },
+    });
+  }
 }

@@ -1,7 +1,7 @@
-import { Controller, Get, Post, Body, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Patch, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { OrdenesService } from './ordenes.service';
-import { CreateOrdeneDto } from './dto/create-ordene.dto'; // Revisa que el nombre coincida con tu archivo
+import { CreateOrdeneDto } from './dto/create-ordene.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 @ApiTags('La Fábrica (Órdenes de Producción)')
@@ -27,5 +27,14 @@ export class OrdenesController {
   @ApiOperation({ summary: 'Ver detalle y matriz de una Orden específica' })
   findOne(@Param('id') id: string) {
     return this.ordenesService.findOne(+id);
+  }
+
+  // ==========================================
+  // NUEVO: RUTA PARA CAMBIAR EL ESTADO
+  // ==========================================
+  @Patch(':id/estado')
+  @ApiOperation({ summary: 'Actualizar estado de la OP (Terminada, Anulada)' })
+  actualizarEstado(@Param('id') id: string, @Body('estado') estado: string) {
+    return this.ordenesService.actualizarEstado(+id, estado);
   }
 }

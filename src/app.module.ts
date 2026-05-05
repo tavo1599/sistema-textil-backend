@@ -22,6 +22,7 @@ import { join } from 'path';
 import { ArchivosController } from './archivos/archivos.controller';
 import { AlmacenTerminadosModule } from './almacen-terminados/almacen-terminados.module';
 import { ColoresModule } from './colores/colores.module';
+import { DespachosModule } from './despachos/despachos.module';
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { ColoresModule } from './colores/colores.module';
       serveRoot: '/uploads', 
     }),
     AlmacenTerminadosModule,
+    DespachosModule,
   ],
   // 4. Registramos el controlador para que Swagger lo detecte
   controllers: [AppController, ArchivosController],

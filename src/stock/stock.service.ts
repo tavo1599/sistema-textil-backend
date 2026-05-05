@@ -8,14 +8,14 @@ export class StockService {
 
   async ingresarStock(dto: CreateStockDto) {
     // Generamos un SKU único: P(Producto)-C(Color)-T(Talla)
-    const skuBarras = `P${dto.productoId}-C${dto.colorId}-T${dto.tallaId}`;
+    const skuBarras = `P${dto.productoId}-C${dto.color}-T${dto.talla}`;
 
     // Buscamos si ya existe esta prenda en este almacén específico
     const stockExistente = await this.prisma.stockPrenda.findFirst({
       where: {
         productoId: dto.productoId,
-        colorId: dto.colorId,
-        tallaId: dto.tallaId,
+        color: dto.color,
+        talla: dto.talla,
         almacenId: dto.almacenId
       }
     });
@@ -32,8 +32,8 @@ export class StockService {
         data: {
           skuBarras: skuBarras,
           productoId: dto.productoId,
-          colorId: dto.colorId,
-          tallaId: dto.tallaId,
+          color: dto.color,
+          talla: dto.talla,
           almacenId: dto.almacenId,
           cantidad: dto.cantidad
         }
@@ -45,9 +45,8 @@ export class StockService {
     return this.prisma.stockPrenda.findMany({
       include: { 
         producto: true, 
-        color: true, 
-        talla: true, 
         almacen: true 
+        // Ya no ponemos color: true ni talla: true porque ya no son tablas, son simple texto.
       }
     });
   }
