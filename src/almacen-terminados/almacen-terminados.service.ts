@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -127,6 +127,39 @@ export class AlmacenTerminadosService {
       return { success: true, message: "Salida registrada correctamente" };
     });
   }
+
+  async revertirIngreso(data: any) {
+  const { bodegaId, productoId, color, talla, cantidad } = data;
+  const cantRestar = Number(cantidad);
+
+  const itemExistente = await this.prisma.inventarioTerminado.findFirst({
+    where: { bodegaId: Number(bodegaId), productoId: Number(productoId), color, talla }
+  });
+
+  if (itemExistente && itemExistente.stock >= cantRestar) {
+    return await this.prisma.inventarioTerminado.update({
+      where: { id: itemExistente.id },
+      data: { stock: itemExistente.stock - cantRestar },
+    });
+  } else {
+    throw new BadRequestException('No hay stock suficiente para deshacer esta acción.');
+  }
+}
+
+async ajustarStockManual(data: any) {
+  const { inventarioId, nuevoStock, motivo } = data;
+
+  // 1. Actualizamos el stock
+  const actualizado = await this.prisma.inventarioTerminado.update({
+    where: { id: Number(inventarioId) },
+    data: { stock: Number(nuevoStock) },
+  });
+
+  // 2. (OPCIONAL PERO RECOMENDADO) Aquí podrías guardar el "motivo" en una tabla de Auditoría o Movimientos
+  // await this.prisma.auditoriaKardex.create({ data: { inventarioId, stockAnterior, stockNuevo, motivo, fecha } })
+
+  return actualizado;
+}
 
   async updateBodega(id: number, data: { nombre?: string; tipo?: string; direccion?: string; estado?: boolean }) {
     return this.prisma.bodega.update({
