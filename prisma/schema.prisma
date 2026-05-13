@@ -49,6 +49,8 @@ model Producto {
 
   rutasBase      ProductoRuta[]
   inventarios InventarioTerminado[]
+  detallesVenta VentaDetalle[]
+  movimientos   MovimientoInventario[]
 }
 
 model Insumo {
@@ -272,6 +274,8 @@ model Bodega {
   estado      Boolean  @default(true)
   
   inventarios InventarioTerminado[]
+  ventas        Venta[]
+  movimientos   MovimientoInventario[]
 }
 
 model InventarioTerminado {
@@ -301,4 +305,64 @@ model DespachoVenta {
   prendas     Int               // Cantidad total de ropa a enviar
   estado      String   @default("Listo para Empaque") // 'Listo para Empaque', 'En Tránsito'
   fecha       DateTime @default(now())
+  ventaId     Int?     @unique
+  venta       Venta?   @relation(fields: [ventaId], references: [id])
+}
+
+// ==========================================
+// 7. VENTAS, HISTORIAL (POS) Y KARDEX
+// ==========================================
+
+model Venta {
+  id              Int       @id @default(autoincrement())
+  correlativo     String    @unique // Ej: 'BOL-00001', 'FAC-00001'
+  clienteNombre   String    @default("Público General")
+  tipoVenta       String    // 'MINORISTA', 'MAYORISTA'
+  metodoEntrega   String    // 'ENTREGA_INMEDIATA', 'RECOJO_TIENDA', 'ENVIO_AGENCIA'
+  destinoEnvio    String?   // Ej: 'Shalom - Cusco'
+  totalPagado     Decimal   @db.Decimal(10, 2)
+  estado          String    @default("Completada") // 'Completada', 'Pendiente Despacho', 'Anulada'
+  fecha           DateTime  @default(now())
+
+  // Relación a la bodega donde se hizo la venta
+  bodegaId        Int
+  bodega          Bodega    @relation(fields: [bodegaId], references: [id])
+
+  // Sus detalles (El historial de qué compró)
+  detalles        VentaDetalle[]
+  
+  // Enlace con despacho (Si requiere envío, se genera un despacho asociado a esta venta)
+  despacho        DespachoVenta? 
+}
+
+model VentaDetalle {
+  id              Int       @id @default(autoincrement())
+  
+  ventaId         Int
+  venta           Venta     @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+
+  productoId      Int
+  producto        Producto  @relation(fields: [productoId], references: [id])
+
+  color           String
+  talla           String
+  cantidad        Int
+  precioUnitario  Decimal   @db.Decimal(10, 2)
+  subtotal        Decimal   @db.Decimal(10, 2) // cantidad * precioUnitario
+}
+
+model MovimientoInventario {
+  id              Int       @id @default(autoincrement())
+  tipoMovimiento  String    
+  motivo          String    
+  cantidad        Int
+  fecha           DateTime  @default(now())
+  referenciaId    Int?      
+  productoId      Int
+  color           String
+  talla           String
+  bodegaId        Int
+  
+  producto        Producto  @relation(fields: [productoId], references: [id])
+  bodega          Bodega    @relation(fields: [bodegaId], references: [id])
 }

@@ -13,6 +13,7 @@ import { StockModule } from './stock/stock.module';
 import { VentasModule } from './ventas/ventas.module';
 import { ReportesModule } from './reportes/reportes.module';
 import { AuthModule } from './auth/auth.module';
+import { ScannerGateway } from './scanner/scanner.gateway';
 
 // 1. Importamos las herramientas para ver archivos
 import { ServeStaticModule } from '@nestjs/serve-static';
@@ -49,6 +50,6 @@ import { DespachosModule } from './despachos/despachos.module';
   ],
   // 4. Registramos el controlador para que Swagger lo detecte
   controllers: [AppController, ArchivosController],
-  providers: [AppService],
+  providers: [AppService, ScannerGateway,],
 })
 export class AppModule {}
