@@ -9,7 +9,9 @@ async function bootstrap() {
   // EL PASE LIBRE PARA TU FRONTEND (CORS)
   // =========================================================
   app.enableCors({
-    origin: '*', // Por ahora dejamos que cualquier frontend entre. Luego lo cambiaremos por tu dominio real.
+    // En producción, es mejor poner la URL de Vercel aquí. 
+    // Pero 'true' funcionará para que no te bloquee al inicio.
+    origin: true, 
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true,
   });
@@ -24,6 +26,15 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api', app, document);
 
-  await app.listen(3000);
+  // =========================================================
+  // 🚀 AJUSTE PARA RAILWAY: PUERTO DINÁMICO
+  // =========================================================
+  // process.env.PORT es la variable que Railway llena automáticamente.
+  const port = process.env.PORT || 3000;
+  
+  // Escuchamos en el puerto asignado y en '0.0.0.0' para aceptar tráfico externo
+  await app.listen(port, '0.0.0.0');
+  
+  console.log(`✅ Moditex API lista en el puerto: ${port}`);
 }
 bootstrap();

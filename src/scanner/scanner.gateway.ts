@@ -10,7 +10,12 @@ import {
 import { Server, Socket } from 'socket.io';
 
 // 🚨 IMPORTANTE: cors: { origin: '*' } permite que tu frontend en Vue se conecte sin bloqueos
-@WebSocketGateway({ cors: { origin: '*' } })
+@WebSocketGateway({
+  cors: {
+    origin: '*', // Permite que cualquier IP se conecte
+    methods: ['GET', 'POST'],
+  },
+})
 export class ScannerGateway implements OnGatewayConnection, OnGatewayDisconnect {
   
   @WebSocketServer()

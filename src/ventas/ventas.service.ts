@@ -16,7 +16,6 @@ export class VentasService {
       // 1. VALIDAR STOCK Y DESCONTAR EN INVENTARIO (Atomicidad)
       // ========================================================
       for (const item of dto.detalles) {
-        // Usamos el índice único compuesto que creamos en el schema para búsquedas ultra rápidas
         const registroStock = await tx.inventarioTerminado.findUnique({
           where: {
             productoId_bodegaId_color_talla: {
@@ -34,7 +33,7 @@ export class VentasService {
           );
         }
 
-        // 📉 Descuento atómico de Prisma (Previene sobreventas por concurrencia)
+        // 📉 Descuento atómico de Prisma
         await tx.inventarioTerminado.update({
           where: { id: registroStock.id },
           data: { 
@@ -63,7 +62,6 @@ export class VentasService {
           bodegaId: Number(dto.almacenId),
           estado: dto.requiereEnvio || metodoEntregaFinal === 'ENVIO_AGENCIA' ? 'Pendiente Despacho' : 'Completada',
           
-          // Prisma permite crear los detalles anidados en la misma operación
           detalles: {
             create: dto.detalles.map(item => ({
               productoId: Number(item.productoId),
@@ -86,7 +84,7 @@ export class VentasService {
             tipoMovimiento: 'SALIDA',
             motivo: 'VENTA',
             cantidad: Number(item.cantidad),
-            referenciaId: nuevaVenta.id, // Vinculamos la salida a esta venta
+            referenciaId: nuevaVenta.id,
             productoId: Number(item.productoId),
             color: String(item.color),
             talla: String(item.talla),
@@ -108,13 +106,13 @@ export class VentasService {
             destino: dto.destinoEnvio || 'Recojo en Agencia',
             prendas: totalPrendasVendidas,
             estado: 'Listo para Empaque',
-            ventaId: nuevaVenta.id // 🔥 Enlazamos el despacho a la venta que acabamos de crear
+            ventaId: nuevaVenta.id 
           }
         });
       }
 
       // ========================================================
-      // 5. RETORNO AL FRONTEND (Para imprimir el Ticket)
+      // 5. RETORNO AL FRONTEND
       // ========================================================
       return {
         id: nuevaVenta.id,
@@ -129,15 +127,69 @@ export class VentasService {
     });
   }
 
-  // Ahora si consultas los despachos, puedes traer la info de la venta original
   async obtenerDespachosPendientes() {
     return this.prisma.despachoVenta.findMany({
       orderBy: { fecha: 'desc' },
       include: { 
         venta: {
-          include: { detalles: true } // El almacenero podrá ver exactamente qué empacar
+          include: { detalles: true } 
         } 
       }
     });
+  }
+
+  // ========================================================
+  // 📊 NUEVO: REPORTE GENERAL PARA EL DASHBOARD MVP
+  // ========================================================
+  async obtenerReporteGeneral() {
+    const inicioHoy = new Date();
+    inicioHoy.setHours(0, 0, 0, 0);
+
+    // 1. Obtener todas las ventas de hoy con sus detalles
+    const ventasDeHoy = await this.prisma.venta.findMany({
+      where: { fecha: { gte: inicioHoy } },
+      include: { detalles: true }
+    });
+
+    // Sumar el dinero y las prendas manualmente (más seguro y exacto)
+    let totalDineroHoy = 0;
+    let totalPrendasHoy = 0;
+
+    ventasDeHoy.forEach(venta => {
+      totalDineroHoy += Number(venta.totalPagado || 0);
+      venta.detalles.forEach(detalle => {
+        totalPrendasHoy += Number(detalle.cantidad || 0);
+      });
+    });
+
+    // 2. Alertas de Stock Bajo (buscando en tu tabla inventarioTerminado)
+    const alertasStock = await this.prisma.inventarioTerminado.count({
+      where: { stock: { lt: 5 } }
+    });
+
+    // 3. Últimas 10 ventas registradas
+    const ultimasVentas = await this.prisma.venta.findMany({
+      take: 10,
+      orderBy: { fecha: 'desc' },
+      include: { bodega: true }
+    });
+
+    // Retornamos la data exactamente como Vue la está esperando
+    return {
+      kpis: {
+        ventasHoy: totalDineroHoy.toFixed(2),
+        prendasVendidas: totalPrendasHoy,
+        stockBajo: alertasStock
+      },
+      ultimasVentas: ultimasVentas.map(v => ({
+        id: v.id,
+        correlativo: v.correlativo,
+        createdAt: v.fecha, // Mapeado para la tabla de Vue
+        total: v.totalPagado, // Mapeado para la tabla de Vue
+        metodoPago: v.tipoVenta, // Usamos el tipoVenta como referencia
+        estado: v.estado,
+        almacen: v.bodega?.nombre || 'Almacén Principal'
+      }))
+    };
   }
 }

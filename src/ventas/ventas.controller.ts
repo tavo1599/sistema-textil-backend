@@ -15,10 +15,18 @@ export class VentasController {
   }
 
   // ========================================================
-  // 2. NUEVO ENDPOINT: LOGÍSTICA (Para el módulo de despachos)
+  // 2. ENDPOINT: LOGÍSTICA (Para el módulo de despachos)
   // ========================================================
   @Get('despachos-pendientes')
   obtenerDespachos() {
     return this.ventasService.obtenerDespachosPendientes();
+  }
+
+  // ========================================================
+  // 3. NUEVO ENDPOINT: REPORTES (Para el Dashboard MVP)
+  // ========================================================
+  @Get('reporte-general')
+  obtenerReporte() {
+    return this.ventasService.obtenerReporteGeneral();
   }
 }
