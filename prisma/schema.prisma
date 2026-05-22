@@ -314,25 +314,40 @@ model DespachoVenta {
 // ==========================================
 
 model Venta {
-  id              Int       @id @default(autoincrement())
-  correlativo     String    @unique // Ej: 'BOL-00001', 'FAC-00001'
-  clienteNombre   String    @default("Público General")
-  tipoVenta       String    // 'MINORISTA', 'MAYORISTA'
-  metodoEntrega   String    // 'ENTREGA_INMEDIATA', 'RECOJO_TIENDA', 'ENVIO_AGENCIA'
-  destinoEnvio    String?   // Ej: 'Shalom - Cusco'
-  totalPagado     Decimal   @db.Decimal(10, 2)
-  estado          String    @default("Completada") // 'Completada', 'Pendiente Despacho', 'Anulada'
-  fecha           DateTime  @default(now())
-
-  // Relación a la bodega donde se hizo la venta
-  bodegaId        Int
-  bodega          Bodega    @relation(fields: [bodegaId], references: [id])
-
-  // Sus detalles (El historial de qué compró)
-  detalles        VentaDetalle[]
+  id              Int      @id @default(autoincrement())
+  correlativo     String   @unique // Ej: 'BOL-00001'
   
-  // Enlace con despacho (Si requiere envío, se genera un despacho asociado a esta venta)
+  // Conexión con el cliente (Opcional por si es alguien de paso que paga al contado)
+  clienteId       Int?
+  cliente         Cliente? @relation(fields: [clienteId], references: [id])
+
+  clienteNombre   String         @default("Público General")
+
+  tipoVenta       String   // 'MINORISTA', 'MAYORISTA'
+  
+  // 🔥 NUEVO: Lógica de Pagos
+  condicionPago   String   @default("CONTADO") // 'CONTADO', 'CREDITO_ESTRICTO', 'CREDITO_FLEXIBLE'
+  estadoPago      String   @default("PAGADO")  // 'PAGADO', 'PENDIENTE', 'PAGO_PARCIAL'
+  
+  metodoEntrega   String   
+  destinoEnvio    String?  
+  
+  // Matemáticas de la venta
+  totalVenta      Decimal        @default(0.00) @db.Decimal(10, 2)  // <-- Agrégale el @default(0.00)
+  totalPagado     Decimal        @default(0.00) @db.Decimal(10, 2)
+  
+  estado          String   @default("Completada") 
+  fecha           DateTime @default(now())
+
+  bodegaId        Int
+  bodega          Bodega   @relation(fields: [bodegaId], references: [id])
+
+  detalles        VentaDetalle[]
   despacho        DespachoVenta? 
+  
+  // 🔥 Enlace a sus cuotas y recibos de pago
+  cuotas          CuotaCredito[]
+  abonos          Abono[]
 }
 
 model VentaDetalle {
@@ -349,6 +364,52 @@ model VentaDetalle {
   cantidad        Int
   precioUnitario  Decimal   @db.Decimal(10, 2)
   subtotal        Decimal   @db.Decimal(10, 2) // cantidad * precioUnitario
+}
+
+model CuotaCredito {
+  id               Int      @id @default(autoincrement())
+  
+  ventaId          Int
+  venta            Venta    @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+  
+  numeroCuota      Int      // Ej: 1, 2, 3 (O 1 si es flexible)
+  montoEsperado    Decimal  @db.Decimal(10, 2) // Cuánto debe pagar en esta cuota
+  montoPagado      Decimal  @default(0.00) @db.Decimal(10, 2) // Cuánto ha ido abonando
+  
+  fechaVencimiento DateTime? // NULO = Flexible. CON FECHA = Estricto
+  estado           String   @default("PENDIENTE") // 'PENDIENTE', 'PAGADA', 'VENCIDA'
+  
+  abonos           Abono[]  // Los pagos específicos a esta cuota
+}
+
+model Abono {
+  id               Int      @id @default(autoincrement())
+  
+  ventaId          Int
+  venta            Venta    @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+  
+  cuotaId          Int?
+  cuota            CuotaCredito? @relation(fields: [cuotaId], references: [id])
+  
+  monto            Decimal  @db.Decimal(10, 2)
+  metodoPago       String   // 'EFECTIVO', 'YAPE', 'PLIN', 'TRANSFERENCIA'
+  referencia       String?  // Número de operación bancaria (Opcional)
+  fecha            DateTime @default(now())
+  anotacion        String?  // Ej: "Depositó su esposa", "Abono semanal"
+}
+
+model Cliente {
+  id             Int      @id @default(autoincrement())
+  documento      String?   @unique // DNI o RUC
+  nombre         String
+  telefono       String?
+  direccion      String?
+  
+  // 🔥 CONTROL DE CRÉDITO
+  limiteCredito  Decimal  @default(0.00) @db.Decimal(10, 2) // Ej: 5000.00
+  saldoPendiente Decimal  @default(0.00) @db.Decimal(10, 2) // Deuda actual acumulada
+  
+  ventas         Venta[]  // Historial de todas sus compras
 }
 
 model MovimientoInventario {

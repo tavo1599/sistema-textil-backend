@@ -14,6 +14,13 @@ export class AlmacenTerminadosService {
     return this.prisma.bodega.create({ data });
   }
 
+  async updateBodega(id: number, data: { nombre?: string; tipo?: string; direccion?: string; estado?: boolean }) {
+    return this.prisma.bodega.update({
+      where: { id },
+      data
+    });
+  }
+
   // --- INVENTARIO (KARDEX) ---
   async getInventario() {
     return this.prisma.inventarioTerminado.findMany({
@@ -25,146 +32,262 @@ export class AlmacenTerminadosService {
     });
   }
 
-  async addInventario(data: { productoId: number; bodegaId: number; color: string; talla: string; cantidad: number }) {
-    // 1. Buscamos si ya existe exactamente este pantalón en esa bodega
-    const existente = await this.prisma.inventarioTerminado.findFirst({
-      where: {
-        productoId: data.productoId,
-        bodegaId: data.bodegaId,
-        color: data.color,
-        talla: data.talla
-      }
-    });
-
-    if (existente) {
-      // 2. Si ya existe, le SUMAMOS la nueva cantidad al stock actual
-      return this.prisma.inventarioTerminado.update({
-        where: { id: existente.id },
-        data: { stock: existente.stock + data.cantidad }
-      });
-    } else {
-      // 3. Si no existe, lo creamos por primera vez
-      return this.prisma.inventarioTerminado.create({
-        data: {
+  async addInventario(data: { productoId: number; bodegaId: number; color: string; talla: string; cantidad: number; motivo?: string }) {
+    return this.prisma.$transaction(async (tx) => {
+      // 1. Actualizamos o creamos el stock
+      const existente = await tx.inventarioTerminado.findFirst({
+        where: {
           productoId: data.productoId,
           bodegaId: data.bodegaId,
           color: data.color,
-          talla: data.talla,
-          stock: data.cantidad
+          talla: data.talla
         }
       });
-    }
-  }
 
-  async transferirInventario(data: { origenId: number; destinoId: number; productoId: number; color: string; talla: string; cantidad: number }) {
-    if (data.origenId === data.destinoId) throw new Error("El origen y destino no pueden ser la misma bodega.");
+      let inventarioActualizado;
 
-    return this.prisma.$transaction(async (tx) => {
-      // 1. Verificamos que el origen tenga stock suficiente
-      const origen = await tx.inventarioTerminado.findFirst({
-        where: { bodegaId: data.origenId, productoId: data.productoId, color: data.color, talla: data.talla }
-      });
-
-      if (!origen || origen.stock < data.cantidad) {
-        throw new Error("No hay stock suficiente en la bodega de origen para este traslado.");
-      }
-
-      // 2. Le restamos la cantidad al origen
-      await tx.inventarioTerminado.update({
-        where: { id: origen.id },
-        data: { stock: origen.stock - data.cantidad }
-      });
-
-      // 3. Buscamos si el destino ya tiene esa misma prenda
-      const destino = await tx.inventarioTerminado.findFirst({
-        where: { bodegaId: data.destinoId, productoId: data.productoId, color: data.color, talla: data.talla }
-      });
-
-      if (destino) {
-        // Si ya tiene, le sumamos
-        await tx.inventarioTerminado.update({
-          where: { id: destino.id },
-          data: { stock: destino.stock + data.cantidad }
+      if (existente) {
+        inventarioActualizado = await tx.inventarioTerminado.update({
+          where: { id: existente.id },
+          data: { stock: existente.stock + Number(data.cantidad) }
         });
       } else {
-        // Si no tiene, creamos la fila por primera vez en esa bodega
-        await tx.inventarioTerminado.create({
+        inventarioActualizado = await tx.inventarioTerminado.create({
           data: {
-            bodegaId: data.destinoId,
             productoId: data.productoId,
+            bodegaId: data.bodegaId,
             color: data.color,
             talla: data.talla,
-            stock: data.cantidad
+            stock: Number(data.cantidad)
           }
         });
       }
 
-      return { success: true, message: "Traslado completado con éxito" };
+      // 2. 🔥 REGISTRO EN EL KARDEX
+      await tx.movimientoInventario.create({
+        data: {
+          tipoMovimiento: 'INGRESO',
+          motivo: data.motivo || 'Ingreso libre de producción',
+          cantidad: Number(data.cantidad),
+          productoId: Number(data.productoId),
+          color: data.color,
+          talla: data.talla,
+          bodegaId: Number(data.bodegaId)
+        }
+      });
+
+      return inventarioActualizado;
+    });
+  }
+
+  async transferirInventario(data: { 
+    origenId: number; 
+    destinoId: number; 
+    detalles: { productoId: number; color: string; talla: string; cantidad: number }[] // 🔥 Ahora recibe una lista (Array)
+  }) {
+    if (data.origenId === data.destinoId) {
+      throw new BadRequestException("El origen y destino no pueden ser la misma bodega.");
+    }
+    if (!data.detalles || data.detalles.length === 0) {
+      throw new BadRequestException("Debe seleccionar al menos un producto para trasladar.");
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      
+      // 🔥 Abrimos el bucle para procesar cada prenda de la lista
+      for (const item of data.detalles) {
+        
+        // 1. Validamos y restamos del origen
+        const origen = await tx.inventarioTerminado.findFirst({
+          where: { bodegaId: data.origenId, productoId: item.productoId, color: item.color, talla: item.talla }
+        });
+
+        if (!origen || origen.stock < item.cantidad) {
+          throw new BadRequestException(`No hay stock suficiente para la prenda ID: ${item.productoId} (${item.color} - ${item.talla}) en el origen.`);
+        }
+
+        await tx.inventarioTerminado.update({
+          where: { id: origen.id },
+          data: { stock: origen.stock - Number(item.cantidad) }
+        });
+
+        // 🔥 KARDEX ORIGEN
+        await tx.movimientoInventario.create({
+          data: {
+            tipoMovimiento: 'SALIDA',
+            motivo: `Traslado LOTE saliente hacia bodega ID: ${data.destinoId}`,
+            cantidad: -Number(item.cantidad),
+            productoId: item.productoId,
+            color: item.color,
+            talla: item.talla,
+            bodegaId: data.origenId
+          }
+        });
+
+        // 2. Sumamos al destino
+        const destino = await tx.inventarioTerminado.findFirst({
+          where: { bodegaId: data.destinoId, productoId: item.productoId, color: item.color, talla: item.talla }
+        });
+
+        if (destino) {
+          await tx.inventarioTerminado.update({
+            where: { id: destino.id },
+            data: { stock: destino.stock + Number(item.cantidad) }
+          });
+        } else {
+          await tx.inventarioTerminado.create({
+            data: {
+              bodegaId: data.destinoId,
+              productoId: item.productoId,
+              color: item.color,
+              talla: item.talla,
+              stock: Number(item.cantidad)
+            }
+          });
+        }
+
+        // 🔥 KARDEX DESTINO
+        await tx.movimientoInventario.create({
+          data: {
+            tipoMovimiento: 'INGRESO',
+            motivo: `Traslado LOTE entrante desde bodega ID: ${data.origenId}`,
+            cantidad: Number(item.cantidad),
+            productoId: item.productoId,
+            color: item.color,
+            talla: item.talla,
+            bodegaId: data.destinoId
+          }
+        });
+      } // Fin del bucle
+
+      return { success: true, message: `Traslado de ${data.detalles.length} ítems completado con éxito` };
     });
   }
 
   // --- SALIDAS / VENTAS (PUNTO DE VENTA) ---
-  async registrarSalida(data: { bodegaId: number; items: { productoId: number; color: string; talla: string; cantidad: number }[] }) {
-    // Usamos una transacción para que, si falla un pantalón, no se cobre nada y se cancele todo
+  async registrarSalida(data: { bodegaId: number; items: { productoId: number; color: string; talla: string; cantidad: number }[]; motivo?: string; referenciaId?: number }) {
     return this.prisma.$transaction(async (tx) => {
       for (const item of data.items) {
-        // 1. Buscamos el pantalón exacto en la bodega
         const inventario = await tx.inventarioTerminado.findFirst({
           where: { bodegaId: data.bodegaId, productoId: item.productoId, color: item.color, talla: item.talla }
         });
 
-        // 2. Verificamos que nadie lo haya vendido hace 1 segundo
         if (!inventario || inventario.stock < item.cantidad) {
-          throw new Error(`Stock insuficiente para el producto ID ${item.productoId} (${item.color} Talla ${item.talla})`);
+          throw new BadRequestException(`Stock insuficiente para el producto ID ${item.productoId} (${item.color} Talla ${item.talla})`);
         }
 
-        // 3. Restamos el stock
         await tx.inventarioTerminado.update({
           where: { id: inventario.id },
-          data: { stock: inventario.stock - item.cantidad }
+          data: { stock: inventario.stock - Number(item.cantidad) }
+        });
+
+        // 🔥 REGISTRO EN EL KARDEX: Venta o Salida general
+        await tx.movimientoInventario.create({
+          data: {
+            tipoMovimiento: 'SALIDA',
+            motivo: data.motivo || 'Salida de mercancía (Venta)',
+            cantidad: -Number(item.cantidad),
+            productoId: item.productoId,
+            color: item.color,
+            talla: item.talla,
+            bodegaId: data.bodegaId,
+            referenciaId: data.referenciaId || null
+          }
         });
       }
       return { success: true, message: "Salida registrada correctamente" };
     });
   }
 
+  // --- DESHACER Y AJUSTES ---
   async revertirIngreso(data: any) {
-  const { bodegaId, productoId, color, talla, cantidad } = data;
-  const cantRestar = Number(cantidad);
+    const { bodegaId, productoId, color, talla, cantidad, motivo } = data;
+    const cantRestar = Number(cantidad);
 
-  const itemExistente = await this.prisma.inventarioTerminado.findFirst({
-    where: { bodegaId: Number(bodegaId), productoId: Number(productoId), color, talla }
-  });
+    return this.prisma.$transaction(async (tx) => {
+      const itemExistente = await tx.inventarioTerminado.findFirst({
+        where: { bodegaId: Number(bodegaId), productoId: Number(productoId), color, talla }
+      });
 
-  if (itemExistente && itemExistente.stock >= cantRestar) {
-    return await this.prisma.inventarioTerminado.update({
-      where: { id: itemExistente.id },
-      data: { stock: itemExistente.stock - cantRestar },
+      if (!itemExistente || itemExistente.stock < cantRestar) {
+        throw new BadRequestException('No hay stock suficiente para deshacer esta acción.');
+      }
+
+      const actualizado = await tx.inventarioTerminado.update({
+        where: { id: itemExistente.id },
+        data: { stock: itemExistente.stock - cantRestar },
+      });
+
+      // 🔥 REGISTRO EN EL KARDEX: Anulación
+      await tx.movimientoInventario.create({
+        data: {
+          tipoMovimiento: 'SALIDA',
+          motivo: motivo || 'Acción Deshacer: Ingreso anulado por el usuario',
+          cantidad: -cantRestar,
+          productoId: Number(productoId),
+          color,
+          talla,
+          bodegaId: Number(bodegaId)
+        }
+      });
+
+      return actualizado;
     });
-  } else {
-    throw new BadRequestException('No hay stock suficiente para deshacer esta acción.');
   }
-}
 
-async ajustarStockManual(data: any) {
-  const { inventarioId, nuevoStock, motivo } = data;
+  async ajustarStockManual(data: any) {
+    const { inventarioId, nuevoStock, motivo } = data;
 
-  // 1. Actualizamos el stock
-  const actualizado = await this.prisma.inventarioTerminado.update({
-    where: { id: Number(inventarioId) },
-    data: { stock: Number(nuevoStock) },
-  });
+    return this.prisma.$transaction(async (tx) => {
+      const registroActual = await tx.inventarioTerminado.findUnique({
+        where: { id: Number(inventarioId) }
+      });
 
-  // 2. (OPCIONAL PERO RECOMENDADO) Aquí podrías guardar el "motivo" en una tabla de Auditoría o Movimientos
-  // await this.prisma.auditoriaKardex.create({ data: { inventarioId, stockAnterior, stockNuevo, motivo, fecha } })
+      if (!registroActual) throw new BadRequestException('El registro de inventario no existe');
 
-  return actualizado;
-}
+      const diferencia = Number(nuevoStock) - registroActual.stock;
 
-  async updateBodega(id: number, data: { nombre?: string; tipo?: string; direccion?: string; estado?: boolean }) {
-    return this.prisma.bodega.update({
-      where: { id },
-      data
+      // Si no hay diferencia, no saturamos el kardex con datos inútiles
+      if (diferencia === 0) return registroActual;
+
+      const actualizado = await tx.inventarioTerminado.update({
+        where: { id: Number(inventarioId) },
+        data: { stock: Number(nuevoStock) },
+      });
+
+      // 🔥 REGISTRO EN EL KARDEX: Ajuste Manual (Registra la diferencia matemática)
+      await tx.movimientoInventario.create({
+        data: {
+          tipoMovimiento: 'AJUSTE',
+          motivo: motivo || 'Ajuste manual de inventario',
+          cantidad: diferencia,
+          productoId: registroActual.productoId,
+          color: registroActual.color,
+          talla: registroActual.talla,
+          bodegaId: registroActual.bodegaId
+        }
+      });
+
+      return actualizado;
+    });
+  }
+
+  // --- CONSULTAS DEL KARDEX ---
+  async obtenerHistorialMovimientos(productoId: number, bodegaId: number, color: string, talla: string) {
+    return this.prisma.movimientoInventario.findMany({
+      where: {
+        productoId: productoId,
+        bodegaId: bodegaId,
+        color: color,
+        talla: talla,
+      },
+      orderBy: {
+        fecha: 'desc', // Lo más reciente primero para el modal
+      },
+      include: {
+        producto: { select: { nombre: true, skuBase: true } },
+        bodega: { select: { nombre: true } }
+      }
     });
   }
 }

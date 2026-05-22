@@ -21,4 +21,9 @@ export class VentasController {
   obtenerDespachos() {
     return this.ventasService.obtenerDespachosPendientes();
   }
+
+ @Get('reporte-general')
+  obtenerReporteGeneral() {
+    return this.ventasService.obtenerReporteGeneral();
+  }
 }

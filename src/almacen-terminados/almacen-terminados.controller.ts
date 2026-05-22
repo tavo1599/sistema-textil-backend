@@ -1,10 +1,11 @@
-import { Controller, Get, Post, Body, UseGuards, Param, Put } from '@nestjs/common';
+import { Controller, Get, Post, Body, UseGuards, Param, Put, Query } from '@nestjs/common';
 import { AlmacenTerminadosService } from './almacen-terminados.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 @UseGuards(JwtAuthGuard) // Protegemos la puerta con Token
 @Controller('almacen-terminados')
 export class AlmacenTerminadosController {
+  // Aquí declaraste el servicio como "almacenService"
   constructor(private readonly almacenService: AlmacenTerminadosService) {}
 
   @Get('bodegas')
@@ -16,9 +17,6 @@ export class AlmacenTerminadosController {
   @Get('inventario')
   getInventario() { return this.almacenService.getInventario(); }
 
-  // 🔥 ESTA ES TU RUTA ORIGINAL PARA EL INGRESO CONTINUO 🔥
-  // En tu Vue, asegúrate de que el botón de Guardar Ingreso llame a:
-  // await api.post('/almacen-terminados/inventario', formIngreso.value);
   @Post('inventario')
   addInventario(@Body() body: any) { return this.almacenService.addInventario(body); }
 
@@ -37,19 +35,29 @@ export class AlmacenTerminadosController {
     return this.almacenService.updateBodega(Number(id), body); 
   }
 
-  // ========================================================
-  // 🌟 AQUÍ VAN LAS DOS RUTAS NUEVAS QUE ESTAMOS AGREGANDO 🌟
-  // ========================================================
-
-  // 1. Ruta para el botón "Deshacer" en el modal de ingreso
   @Post('revertir-ingreso')
   revertirIngreso(@Body() body: any) {
     return this.almacenService.revertirIngreso(body);
   }
 
-  // 2. Ruta para el botón "Ajuste (⚙️)" en el Kardex principal
   @Post('ajustar-stock')
   ajustarStock(@Body() body: any) {
     return this.almacenService.ajustarStockManual(body);
+  }
+
+  @Get('movimientos')
+  async obtenerMovimientos(
+    @Query('productoId') productoId: string,
+    @Query('bodegaId') bodegaId: string,
+    @Query('color') color: string,
+    @Query('talla') talla: string,
+  ) {
+    // 🔥 CORREGIDO: Ahora usa "this.almacenService"
+    return this.almacenService.obtenerHistorialMovimientos(
+      Number(productoId),
+      Number(bodegaId),
+      color,
+      talla,
+    );
   }
 }

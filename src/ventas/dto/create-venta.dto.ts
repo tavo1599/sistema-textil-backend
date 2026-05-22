@@ -5,7 +5,7 @@ export class CreateVentaDto {
   tipoVenta!: 'MAYORISTA' | 'MINORISTA' | 'WEB';
   almacenId!: number;
   
-  // 🔥 NUEVOS CAMPOS DE LOGÍSTICA ACTUALIZADA 🔥
+  // 🔥 CAMPOS DE LOGÍSTICA ACTUALIZADA 🔥
   metodoEntrega?: string; // 'ENTREGA_INMEDIATA' | 'RECOJO_TIENDA' | 'ENVIO_AGENCIA'
   requiereEnvio?: boolean; 
   destinoEnvio?: string;
@@ -17,4 +17,23 @@ export class CreateVentaDto {
     cantidad: number;
     precioUnitario: number; 
   }[];
+
+  // ==========================================
+  // 💰 NUEVOS CAMPOS FINANCIEROS (CRÉDITOS)
+  // ==========================================
+  
+  // Condición de pago. Si no se envía, el backend asume 'CONTADO'
+  condicionPago?: 'CONTADO' | 'CREDITO_ESTRICTO' | 'CREDITO_FLEXIBLE';
+  
+  // ID del cliente mayorista (obligatorio solo si es crédito)
+  clienteId?: number; 
+  
+  // Cuánto dinero dejó en caja al momento de la venta
+  adelanto?: number; 
+  
+  // En cuántas partes se divide la deuda (ej: 4)
+  numeroCuotas?: number; 
+  
+  // Cada cuánto tiempo se vence una cuota
+  frecuenciaPago?: 'SEMANAL' | 'QUINCENAL' | 'MENSUAL';
 }

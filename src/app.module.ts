@@ -24,6 +24,9 @@ import { ArchivosController } from './archivos/archivos.controller';
 import { AlmacenTerminadosModule } from './almacen-terminados/almacen-terminados.module';
 import { ColoresModule } from './colores/colores.module';
 import { DespachosModule } from './despachos/despachos.module';
+import { ClientesModule } from './clientes/clientes.module';
+import { CobranzasModule } from './cobranzas/cobranzas.module';
+import { DashboardModule } from './dashboard/dashboard.module';
 
 @Module({
   imports: [
@@ -47,6 +50,9 @@ import { DespachosModule } from './despachos/despachos.module';
     }),
     AlmacenTerminadosModule,
     DespachosModule,
+    ClientesModule,
+    CobranzasModule,
+    DashboardModule,
   ],
   // 4. Registramos el controlador para que Swagger lo detecte
   controllers: [AppController, ArchivosController],
