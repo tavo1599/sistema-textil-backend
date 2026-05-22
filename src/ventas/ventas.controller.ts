@@ -15,7 +15,7 @@ export class VentasController {
   }
 
   // ========================================================
-  // 2. NUEVO ENDPOINT: LOGÍSTICA (Para el módulo de despachos)
+  // 2. ENDPOINT: LOGÍSTICA (Para el módulo de despachos)
   // ========================================================
   @Get('despachos-pendientes')
   obtenerDespachos() {
