@@ -88,4 +88,15 @@ export class ComprasService {
       return nuevaCompra;
     });
   }
+
+  async crearProveedor(data: any) {
+    return this.prisma.proveedor.create({
+      data: {
+        ruc: data.ruc || null,
+        razonSocial: data.razonSocial,
+        telefono: data.telefono || null,
+        tipo: data.tipo || 'GENERAL'
+      }
+    });
+  }
 }

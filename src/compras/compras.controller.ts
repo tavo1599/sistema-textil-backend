@@ -16,4 +16,9 @@ export class ComprasController {
   crearCompra(@Body() data: any) {
     return this.comprasService.registrarCompra(data);
   }
+
+  @Post('proveedores')
+  crearProveedor(@Body() body: { ruc?: string; razonSocial: string; telefono?: string; tipo?: string }) {
+    return this.comprasService.crearProveedor(body);
+  }
 }
