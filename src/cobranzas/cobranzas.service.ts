@@ -122,4 +122,37 @@ export class CobranzasService {
       orderBy: { id: 'desc' } // Los pagos más recientes primero
     });
   }
+
+async crearDeudaManual(data: { clienteId: number; monto: number; concepto: string }) {
+    const correlativoManual = `MAN-${Date.now().toString().slice(-6)}`;
+
+    return this.prisma.$transaction(async (tx) => {
+      
+      // 1. Incrementamos el saldoPendiente del cliente afectado
+      await tx.cliente.update({
+        where: { id: data.clienteId },
+        data: {
+          saldoPendiente: {
+            increment: data.monto,
+          },
+        },
+      });
+
+      // 2. Creamos el registro con todos los campos que exige Prisma
+      return tx.venta.create({
+        data: {
+          clienteId: data.clienteId,
+          correlativo: correlativoManual,
+          totalVenta: data.monto,
+          totalPagado: 0,
+          condicionPago: 'CREDITO',
+          
+          // 🔥 LOS 3 CAMPOS OBLIGATORIOS QUE FALTABAN:
+          tipoVenta: 'MAYORISTA', 
+          metodoEntrega: 'ENTREGA_INMEDIATA',
+          bodegaId: 1, // Asignamos la deuda a la bodega principal
+        },
+      });
+    });
+  }
 }

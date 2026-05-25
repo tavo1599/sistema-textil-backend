@@ -23,4 +23,9 @@ export class CobranzasController {
   obtenerHistorial(@Param('clienteId') clienteId: string) {
     return this.cobranzasService.obtenerHistorialPagos(Number(clienteId));
   }
+
+  @Post('manual')
+  registrarDeudaManual(@Body() body: { clienteId: number; monto: number; concepto: string }) {
+    return this.cobranzasService.crearDeudaManual(body);
+  }
 }
