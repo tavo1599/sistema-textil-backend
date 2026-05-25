@@ -11,9 +11,18 @@ export class ComprasService {
     });
   }
 
-  async registrarCompra(data: any) {
+async registrarCompra(data: any) {
     return this.prisma.$transaction(async (tx) => {
-      // 1. Guardamos la "Cabecera" de la compra (Factura) y sus detalles en el historial
+      
+      // Capturamos la bodega exacta que eligió el usuario en pantalla
+      const idBodegaReal = data.bodegaDestinoId;
+
+      // (Nota: Como en su base de datos "Bodega" y "Almacen" son tablas separadas, 
+      // mantenemos el findFirst solo para la tabla Almacen que usa el escáner POS)
+      const almacenPrincipal = await tx.almacen.findFirst({ orderBy: { id: 'asc' } });
+      const idAlmacenReal = almacenPrincipal ? almacenPrincipal.id : idBodegaReal;
+
+      // 1. Guardamos la "Cabecera" de la compra
       const nuevaCompra = await tx.compra.create({
         data: {
           correlativo: data.correlativo,
@@ -35,11 +44,11 @@ export class ComprasService {
         },
       });
 
-      // 2. Analizamos cada fila de la compra para repartir el stock a donde pertenece
+      // 2. Analizamos cada fila y repartimos
       for (const detalle of data.detalles) {
         
         if (detalle.tipoItem === 'INSUMO') {
-          // Si es tela, hilo, cierre... Va directo a engordar el stock de Avíos
+          // Los avíos siguen sumándose a la tabla general de insumos
           await tx.insumo.update({
             where: { id: detalle.insumoId },
             data: { stockActual: { increment: detalle.cantidad } },
@@ -47,12 +56,12 @@ export class ComprasService {
         } 
         
         else if (detalle.tipoItem === 'PRENDA') {
-          // Si es ropa terminada, la inyectamos a la Bodega Principal (ID 1)
+          // 🔥 AQUÍ ESTÁ EL CAMBIO: La ropa entra a la Bodega que el usuario escogió
           await tx.inventarioTerminado.upsert({
             where: {
               productoId_bodegaId_color_talla: {
                 productoId: detalle.productoId,
-                bodegaId: 1, // Asumimos Bodega Central para ingresos de compras
+                bodegaId: idBodegaReal, 
                 color: detalle.color,
                 talla: detalle.talla,
               },
@@ -60,14 +69,14 @@ export class ComprasService {
             update: { stock: { increment: detalle.cantidad } },
             create: {
               productoId: detalle.productoId,
-              bodegaId: 1,
+              bodegaId: idBodegaReal,
               color: detalle.color,
               talla: detalle.talla,
               stock: detalle.cantidad,
             },
           });
 
-          // 🔥 EL TOQUE MAESTRO: Si la ropa trajo su propio código (QR), lo enlazamos al POS
+          // Si trajo código de barras del proveedor, lo enlazamos al escáner
           if (detalle.skuProveedor && detalle.skuProveedor.trim() !== '') {
             await tx.stockPrenda.upsert({
               where: { skuBarras: detalle.skuProveedor },
@@ -78,7 +87,7 @@ export class ComprasService {
                 productoId: detalle.productoId,
                 color: detalle.color,
                 talla: detalle.talla,
-                almacenId: 1,
+                almacenId: idAlmacenReal,
               },
             });
           }
