@@ -51,6 +51,7 @@ model Producto {
   inventarios InventarioTerminado[]
   detallesVenta VentaDetalle[]
   movimientos   MovimientoInventario[]
+  detallesCompra  CompraDetalle[]
 }
 
 model Insumo {
@@ -63,6 +64,7 @@ model Insumo {
   stockActual     Decimal @default(0.00)
   
   boms            ProductoBom[]
+  detallesCompra  CompraDetalle[]
 }
 
 model ProveedorTaller {
@@ -426,4 +428,59 @@ model MovimientoInventario {
   
   producto        Producto  @relation(fields: [productoId], references: [id])
   bodega          Bodega    @relation(fields: [bodegaId], references: [id])
+}
+
+model Proveedor {
+  id            Int      @id @default(autoincrement())
+  ruc           String?  @unique
+  razonSocial   String
+  telefono      String?
+  direccion     String?
+  tipo          String   @default("GENERAL") // 'INSUMOS', 'MERCADERIA', 'AMBOS'
+
+  compras       Compra[]
+}
+
+model Compra {
+  id            Int      @id @default(autoincrement())
+  correlativo   String   @unique // Ej: 'FAC-001-456' (Factura del proveedor)
+  fecha         DateTime @default(now())
+  estado        String   @default("COMPLETADA") // 'COMPLETADA', 'PENDIENTE'
+  totalCompra   Decimal  @default(0.00) @db.Decimal(10, 2)
+
+  proveedorId   Int
+  proveedor     Proveedor @relation(fields: [proveedorId], references: [id])
+
+  detalles      CompraDetalle[]
+}
+
+model CompraDetalle {
+  id            Int      @id @default(autoincrement())
+  
+  compraId      Int
+  compra        Compra   @relation(fields: [compraId], references: [id], onDelete: Cascade)
+
+  // ¿Qué estamos comprando?
+  tipoItem      String   // 'INSUMO' (Avíos) o 'PRENDA' (Mercadería terminada)
+
+  // ----------------------------------------------------
+  // OPCIÓN A: Si es un Insumo (Cierres, Hilos, Botones)
+  insumoId      Int?
+  insumo        Insumo?  @relation(fields: [insumoId], references: [id])
+
+  // ----------------------------------------------------
+  // OPCIÓN B: Si es Mercadería Terminada
+  productoId    Int?
+  producto      Producto? @relation(fields: [productoId], references: [id])
+  color         String?
+  talla         String?
+  
+  // 🔥 AQUÍ GUARDAMOS EL QR/CÓDIGO DE BARRAS DEL PROVEEDOR
+  skuProveedor  String?  
+
+  // ----------------------------------------------------
+  // Datos financieros de la línea
+  cantidad      Int
+  costoUnitario Decimal  @db.Decimal(10, 4) // 4 decimales para mayor precisión en avíos
+  subtotal      Decimal  @db.Decimal(10, 2)
 }
