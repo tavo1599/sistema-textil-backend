@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Get } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param } from '@nestjs/common';
 import { VentasService } from './ventas.service';
 import { CreateVentaDto } from './dto/create-venta.dto';
 
@@ -25,5 +25,10 @@ export class VentasController {
  @Get('reporte-general')
   obtenerReporteGeneral() {
     return this.ventasService.obtenerReporteGeneral();
+  }
+
+  @Get('escanear/:codigo')
+  escanearCodigo(@Param('codigo') codigo: string) {
+    return this.ventasService.buscarPorCodigoEscaner(codigo);
   }
 }

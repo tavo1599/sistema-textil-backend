@@ -268,4 +268,45 @@ export class VentasService {
       }
     };
   }
+
+  // ========================================================
+  // 🟢 ESCÁNER DE PUNTO DE VENTA (Conecta QR con Inventario)
+  // ========================================================
+  async buscarPorCodigoEscaner(codigo: string) {
+    // 1. Buscamos el código exacto de la etiqueta en la tabla StockPrenda
+    const prendaEscaneada = await this.prisma.stockPrenda.findUnique({
+      where: { skuBarras: codigo },
+      include: { 
+        producto: true // Traemos el nombre y detalles base
+      }
+    });
+
+    if (!prendaEscaneada) {
+      throw new BadRequestException(`El código escaneado (${codigo}) no existe en el sistema.`);
+    }
+
+    // 2. Buscamos el stock físico real para asegurar que hay prendas disponibles
+    const inventarioFisico = await this.prisma.inventarioTerminado.findFirst({
+      where: {
+        productoId: prendaEscaneada.productoId,
+        color: prendaEscaneada.color,
+        talla: prendaEscaneada.talla,
+        stock: { gt: 0 } // Que tenga al menos 1 en stock
+      }
+    });
+
+    if (!inventarioFisico) {
+      throw new BadRequestException(`El código existe, pero no hay stock físico de esta prenda (${prendaEscaneada.color} - ${prendaEscaneada.talla}).`);
+    }
+
+    // 3. Devolvemos el "molde" exacto que su Carrito de Ventas necesita
+    return {
+      productoId: prendaEscaneada.productoId,
+      nombre: prendaEscaneada.producto.nombre,
+      color: prendaEscaneada.color,
+      talla: prendaEscaneada.talla,
+      stockDisponible: inventarioFisico.stock,
+      bodegaId: inventarioFisico.bodegaId
+    };
+  }
 }
