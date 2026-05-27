@@ -12,84 +12,105 @@ export class ComprasService {
   }
 
 async registrarCompra(data: any) {
+    // 🔥 EL AUTOSANADOR: Lo movemos AFUERA de la transacción. 
+    // Así obligamos a la base de datos a crearlo y confirmar su existencia primero.
+    let almacenPrincipal = await this.prisma.almacen.findFirst({ orderBy: { id: 'asc' } });
+    
+    if (!almacenPrincipal) {
+      almacenPrincipal = await this.prisma.almacen.create({
+        data: {
+          nombre: 'Almacén Central POS',
+          tipo: 'Principal'
+        }
+      });
+    }
+
+    const idAlmacenReal = Number(almacenPrincipal.id);
+
+    // 👇 AQUÍ RECIÉN EMPIEZA LA TRANSACCIÓN SEGURA
     return this.prisma.$transaction(async (tx) => {
       
-      // Capturamos la bodega exacta que eligió el usuario en pantalla
-      const idBodegaReal = data.bodegaDestinoId;
-
-      // (Nota: Como en su base de datos "Bodega" y "Almacen" son tablas separadas, 
-      // mantenemos el findFirst solo para la tabla Almacen que usa el escáner POS)
-      const almacenPrincipal = await tx.almacen.findFirst({ orderBy: { id: 'asc' } });
-      const idAlmacenReal = almacenPrincipal ? almacenPrincipal.id : idBodegaReal;
+      const idBodegaReal = Number(data.bodegaDestinoId);
 
       // 1. Guardamos la "Cabecera" de la compra
       const nuevaCompra = await tx.compra.create({
         data: {
           correlativo: data.correlativo,
-          proveedorId: data.proveedorId,
-          totalCompra: data.totalCompra,
+          proveedorId: Number(data.proveedorId),
+          totalCompra: Number(data.totalCompra),
           detalles: {
             create: data.detalles.map((d: any) => ({
               tipoItem: d.tipoItem,
-              insumoId: d.insumoId,
-              productoId: d.productoId,
+              insumoId: d.insumoId ? Number(d.insumoId) : null,
+              productoId: d.productoId ? Number(d.productoId) : null,
               color: d.color,
               talla: d.talla,
               skuProveedor: d.skuProveedor,
-              cantidad: d.cantidad,
-              costoUnitario: d.costoUnitario,
-              subtotal: d.subtotal,
+              cantidad: Number(d.cantidad),
+              costoUnitario: Number(d.costoUnitario),
+              subtotal: Number(d.subtotal),
             })),
           },
         },
       });
 
-      // 2. Analizamos cada fila y repartimos
+      // 2. Analizamos cada fila y repartimos a donde corresponda
       for (const detalle of data.detalles) {
         
         if (detalle.tipoItem === 'INSUMO') {
-          // Los avíos siguen sumándose a la tabla general de insumos
           await tx.insumo.update({
-            where: { id: detalle.insumoId },
-            data: { stockActual: { increment: detalle.cantidad } },
+            where: { id: Number(detalle.insumoId) },
+            data: { stockActual: { increment: Number(detalle.cantidad) } },
           });
         } 
         
         else if (detalle.tipoItem === 'PRENDA') {
-          // 🔥 AQUÍ ESTÁ EL CAMBIO: La ropa entra a la Bodega que el usuario escogió
+          
           await tx.inventarioTerminado.upsert({
             where: {
               productoId_bodegaId_color_talla: {
-                productoId: detalle.productoId,
+                productoId: Number(detalle.productoId),
                 bodegaId: idBodegaReal, 
                 color: detalle.color,
                 talla: detalle.talla,
               },
             },
-            update: { stock: { increment: detalle.cantidad } },
+            update: { stock: { increment: Number(detalle.cantidad) } },
             create: {
-              productoId: detalle.productoId,
+              productoId: Number(detalle.productoId),
               bodegaId: idBodegaReal,
               color: detalle.color,
               talla: detalle.talla,
-              stock: detalle.cantidad,
+              stock: Number(detalle.cantidad),
             },
           });
 
-          // Si trajo código de barras del proveedor, lo enlazamos al escáner
           if (detalle.skuProveedor && detalle.skuProveedor.trim() !== '') {
-            await tx.stockPrenda.upsert({
-              where: { skuBarras: detalle.skuProveedor },
-              update: { cantidad: { increment: detalle.cantidad } },
-              create: {
-                skuBarras: detalle.skuProveedor,
-                cantidad: detalle.cantidad,
-                productoId: detalle.productoId,
-                color: detalle.color,
-                talla: detalle.talla,
-                almacenId: idAlmacenReal,
-              },
+            // 🔥 REEMPLAZAMOS EL UPSERT POR VALIDACIÓN CLÁSICA PARA EVITAR BUGS DE PRISMA
+            const existeQR = await tx.stockPrenda.findUnique({
+              where: { skuBarras: detalle.skuProveedor }
             });
+
+            if (existeQR) {
+              await tx.stockPrenda.update({
+                where: { skuBarras: detalle.skuProveedor },
+                data: { 
+                  cantidad: { increment: Number(detalle.cantidad) },
+                  almacenId: idAlmacenReal 
+                }
+              });
+            } else {
+              await tx.stockPrenda.create({
+                data: {
+                  skuBarras: detalle.skuProveedor,
+                  cantidad: Number(detalle.cantidad),
+                  productoId: Number(detalle.productoId),
+                  color: detalle.color,
+                  talla: detalle.talla,
+                  almacenId: idAlmacenReal,
+                }
+              });
+            }
           }
         }
       }
