@@ -1,9 +1,13 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service'; // Ajuste la ruta según su proyecto
+import { KardexService } from '../kardex/kardex.service';
 
 @Injectable()
 export class ComprasService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private kardex: KardexService,
+  ) {}
 
   async obtenerProveedores() {
     return this.prisma.proveedor.findMany({
@@ -65,24 +69,20 @@ async registrarCompra(data: any) {
         } 
         
         else if (detalle.tipoItem === 'PRENDA') {
-          
-          await tx.inventarioTerminado.upsert({
-            where: {
-              productoId_bodegaId_color_talla: {
-                productoId: Number(detalle.productoId),
-                bodegaId: idBodegaReal, 
-                color: detalle.color,
-                talla: detalle.talla,
-              },
-            },
-            update: { stock: { increment: Number(detalle.cantidad) } },
-            create: {
-              productoId: Number(detalle.productoId),
-              bodegaId: idBodegaReal,
-              color: detalle.color,
-              talla: detalle.talla,
-              stock: Number(detalle.cantidad),
-            },
+
+          // 🔥 KARDEX VALORIZADO: ingreso con el costo real de la compra.
+          // Recalcula el costo promedio (CPP) y actualiza el stock físico.
+          await this.kardex.registrarIngreso(tx, {
+            productoId: Number(detalle.productoId),
+            color: detalle.color,
+            talla: detalle.talla,
+            bodegaId: idBodegaReal,
+            cantidad: Number(detalle.cantidad),
+            costoUnitario: Number(detalle.costoUnitario), // costo de compra
+            motivo: `COMPRA - ${data.correlativo}`,
+            tipoMovimiento: 'INGRESO',
+            referenciaId: nuevaCompra.id,
+            actualizarStockFisico: true,
           });
 
           if (detalle.skuProveedor && detalle.skuProveedor.trim() !== '') {

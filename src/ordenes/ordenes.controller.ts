@@ -30,11 +30,15 @@ export class OrdenesController {
   }
 
   // ==========================================
-  // NUEVO: RUTA PARA CAMBIAR EL ESTADO
+  // ACTUALIZAR ESTADO
+  // Al pasar a "Terminada", el body puede incluir:
+  //   - estado: "Terminada"
+  //   - cantidadRealProducida: nº de prendas buenas que de verdad salieron
+  //   - margenMayorista / margenMinorista (opcionales, para reajustar al cerrar)
   // ==========================================
   @Patch(':id/estado')
-  @ApiOperation({ summary: 'Actualizar estado de la OP (Terminada, Anulada)' })
-  actualizarEstado(@Param('id') id: string, @Body('estado') estado: string) {
-    return this.ordenesService.actualizarEstado(+id, estado);
+  @ApiOperation({ summary: 'Actualizar estado de la OP (Terminada con costo real, Anulada)' })
+  actualizarEstado(@Param('id') id: string, @Body() body: any) {
+    return this.ordenesService.actualizarEstado(+id, body.estado, body);
   }
 }

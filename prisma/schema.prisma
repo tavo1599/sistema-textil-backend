@@ -52,6 +52,7 @@ model Producto {
   detallesVenta VentaDetalle[]
   movimientos   MovimientoInventario[]
   detallesCompra  CompraDetalle[]
+  costosPromedio  CostoPromedioProducto[]
 }
 
 model Insumo {
@@ -425,9 +426,39 @@ model MovimientoInventario {
   color           String
   talla           String
   bodegaId        Int
-  
+
+  // 🔥 KARDEX VALORIZADO (Costo Promedio Ponderado)
+  // Estas columnas convierten el registro de movimientos en un kardex contable:
+  // cada fila guarda no solo la cantidad, sino el valor del movimiento y el saldo.
+  costoUnitario   Decimal?  @db.Decimal(12, 4)  // costo unitario de ESTE movimiento
+  costoTotal      Decimal?  @db.Decimal(14, 4)  // costoUnitario * |cantidad|
+  saldoCantidad   Int?                          // unidades en stock tras el movimiento
+  saldoCostoProm  Decimal?  @db.Decimal(12, 4)  // costo promedio vigente tras el movimiento
+  saldoValor      Decimal?  @db.Decimal(14, 4)  // saldoCantidad * saldoCostoProm
+
   producto        Producto  @relation(fields: [productoId], references: [id])
   bodega          Bodega    @relation(fields: [bodegaId], references: [id])
+}
+
+// ==========================================
+// COSTO PROMEDIO PONDERADO POR VARIANTE
+// ==========================================
+// Guarda el costo promedio vigente de cada prenda (producto + color + talla).
+// Se recalcula en cada INGRESO; las SALIDAS lo consumen sin recalcular.
+// Costeo GLOBAL por variante (no por bodega): el costo de fabricar una prenda
+// no cambia según en qué almacén esté guardada.
+model CostoPromedioProducto {
+  id            Int      @id @default(autoincrement())
+  productoId    Int
+  color         String   @default("N/A")
+  talla         String   @default("N/A")
+  costoPromedio Decimal  @default(0.0000) @db.Decimal(12, 4)
+  stockValorado Int      @default(0)       // unidades sobre las que se calculó el promedio
+  actualizadoEn DateTime @updatedAt
+
+  producto      Producto @relation(fields: [productoId], references: [id])
+
+  @@unique([productoId, color, talla])
 }
 
 model Proveedor {

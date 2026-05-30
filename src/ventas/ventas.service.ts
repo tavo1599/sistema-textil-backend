@@ -1,10 +1,14 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateVentaDto } from './dto/create-venta.dto'; 
+import { KardexService } from '../kardex/kardex.service';
 
 @Injectable()
 export class VentasService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private kardex: KardexService,
+  ) {}
 
   async registrarVenta(dto: any) { 
     // 🔥 TRANSACCIÓN ATÓMICA: Todo se guarda junto o nada se guarda
@@ -13,7 +17,8 @@ export class VentasService {
       let totalPrendasVendidas = 0;
 
       // ========================================================
-      // 1. VALIDAR STOCK Y DESCONTAR EN INVENTARIO (Atomicidad)
+      // 1. VALIDAR STOCK Y SUMAR TOTALES
+      //    (el descuento físico + kardex valorizado se hace en el paso 4)
       // ========================================================
       for (const item of dto.detalles) {
         const registroStock = await tx.inventarioTerminado.findUnique({
@@ -32,12 +37,6 @@ export class VentasService {
             `Stock insuficiente para el producto ID ${item.productoId} (${item.color} - Talla ${item.talla}) en esta bodega. Stock actual: ${registroStock?.stock || 0}`
           );
         }
-
-        // 📉 Descuento atómico
-        await tx.inventarioTerminado.update({
-          where: { id: registroStock.id },
-          data: { stock: { decrement: Number(item.cantidad) } }
-        });
 
         totalVenta += Number(item.cantidad) * Number(item.precioUnitario);
         totalPrendasVendidas += Number(item.cantidad);
@@ -111,20 +110,20 @@ export class VentasService {
       });
 
       // ========================================================
-      // 4. REGISTRAR KARDEX (AUDITORÍA DE MOVIMIENTOS)
+      // 4. REGISTRAR KARDEX VALORIZADO (SALIDA) + DESCUENTO FÍSICO
+      //    Usa el costo promedio vigente (CPP) de cada prenda.
       // ========================================================
       for (const item of dto.detalles) {
-        await tx.movimientoInventario.create({
-          data: {
-            tipoMovimiento: 'SALIDA',
-            motivo: `VENTA - ${nuevaVenta.correlativo}`,
-            cantidad: -Number(item.cantidad),
-            referenciaId: nuevaVenta.id, 
-            productoId: Number(item.productoId),
-            color: String(item.color),
-            talla: String(item.talla),
-            bodegaId: Number(dto.almacenId)
-          }
+        await this.kardex.registrarSalida(tx, {
+          productoId: Number(item.productoId),
+          color: String(item.color),
+          talla: String(item.talla),
+          bodegaId: Number(dto.almacenId),
+          cantidad: Number(item.cantidad),
+          motivo: `VENTA - ${nuevaVenta.correlativo}`,
+          tipoMovimiento: 'SALIDA',
+          referenciaId: nuevaVenta.id,
+          actualizarStockFisico: true, // descuenta InventarioTerminado
         });
       }
 
