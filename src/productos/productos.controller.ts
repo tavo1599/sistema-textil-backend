@@ -2,22 +2,29 @@ import { Controller, Get, Post, Body, Param, UseGuards, Delete, Put } from '@nes
 import { ProductosService } from './productos.service';
 import { CreateProductoDto } from './dto/create-producto.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
 
-@UseGuards(JwtAuthGuard) // 🛡️ Protegemos las rutas con el Token
+// Login obligatorio para todo. La LECTURA (GET) la pueden hacer ambos roles
+// (el vendedor necesita ver nombres de productos en Almacén y POS).
+// La ESCRITURA queda restringida a ADMIN con @Roles en cada método.
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('productos')
 export class ProductosController {
   constructor(private readonly productosService: ProductosService) {}
 
   // 1. Crear el modelo base (Nombre, SKU)
   @Post()
+  @Roles('ADMIN')
   create(@Body() createProductoDto: CreateProductoDto) {
     return this.productosService.create(createProductoDto);
   }
 
   // 2. NUEVO: Registrar la Ficha Técnica Completa (BOM + Ruta)
   @Post(':id/ficha-tecnica')
+  @Roles('ADMIN')
   async saveFichaTecnica(
-    @Param('id') id: string, 
+    @Param('id') id: string,
     @Body() data: any // Recibimos todo el paquete completo desde Vue
   ) {
     // Le pasamos el paquete completo al servicio para que él lo procese
@@ -25,11 +32,13 @@ export class ProductosController {
   }
 
   @Put(':id')
+  @Roles('ADMIN')
   update(@Param('id') id: string, @Body() body: any) {
     return this.productosService.update(+id, body);
   }
 
   @Delete(':id')
+  @Roles('ADMIN')
   remove(@Param('id') id: string) {
     return this.productosService.remove(+id); // El símbolo + convierte el string a número
   }

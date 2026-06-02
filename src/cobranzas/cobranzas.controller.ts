@@ -1,6 +1,8 @@
-import { Controller, Get, Post, Body, Param } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, UseGuards } from '@nestjs/common';
 import { CobranzasService } from './cobranzas.service';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
+@UseGuards(JwtAuthGuard) // Requiere login (ADMIN y VENDEDOR gestionan cobranzas)
 @Controller('cobranzas')
 export class CobranzasController {
   constructor(private readonly cobranzasService: CobranzasService) {}

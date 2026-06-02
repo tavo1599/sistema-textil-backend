@@ -1,12 +1,14 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { KardexService } from '../kardex/kardex.service';
+import { InsumoKardexService } from '../kardex/insumo-kardex.service';
 
 @Injectable()
 export class OrdenesService {
   constructor(
     private prisma: PrismaService,
     private kardex: KardexService,
+    private insumoKardex: InsumoKardexService,
   ) {}
 
   // ====================================================================
@@ -29,11 +31,11 @@ export class OrdenesService {
           productoId: dto.productoId,
           estado: 'En Proceso',
           rutas: {
-            create: dto.servicios.map((s) => ({
+            create: dto.servicios.map((s, index) => ({
               tipoServicio: s.tipo,
               tallerId: s.tallerId,
               costoUnitarioPactado: s.costoPactado,
-              ordenSecuencia: 1,
+              ordenSecuencia: s.ordenSecuencia ?? index + 1,
             })),
           },
           gastosCif: {
@@ -94,17 +96,14 @@ export class OrdenesService {
           consumoPorPrenda * Number(item.insumo.costoUnitario);
 
         const totalADescontar = consumoPorPrenda * totalPrendasAFabricar;
-        const stockActual = Number(item.insumo.stockActual);
 
-        if (stockActual < totalADescontar) {
-          throw new BadRequestException(
-            `Falta stock de ${item.insumo.nombre}. Necesitas ${totalADescontar.toFixed(2)} pero hay ${stockActual}.`,
-          );
-        }
-
-        await tx.insumo.update({
-          where: { id: item.insumoId },
-          data: { stockActual: stockActual - totalADescontar },
+        await this.insumoKardex.registrarSalida(tx, {
+          insumoId: item.insumoId,
+          cantidad: totalADescontar,
+          costoUnitario: Number(item.insumo.costoUnitario),
+          motivo: `Consumo OP - ${dto.codigoOp}`,
+          tipoMovimiento: 'SALIDA',
+          referenciaId: orden.id,
         });
       }
 
@@ -224,136 +223,250 @@ export class OrdenesService {
           0,
         );
 
-        const receta = await tx.productoBom.findMany({
+        const recetaConCosto = await tx.productoBom.findMany({
           where: { productoId: orden.productoId },
+          include: { insumo: true },
         });
 
-        for (const item of receta) {
+        for (const item of recetaConCosto) {
           const consumoPorPrenda =
             Number(item.cantidadRequerida) *
             (1 + Number(item.mermaEstimadaPct || 0) / 100);
           const totalDevolver = consumoPorPrenda * totalPrendas;
 
-          await tx.insumo.update({
-            where: { id: item.insumoId },
-            data: { stockActual: { increment: totalDevolver } },
-          });
-        }
-      }
-
-      // 🟢 CASO 2: TERMINAR ORDEN -> RECALCULAR COSTO REAL + INGRESAR A ALMACÉN
-      if (orden.estado === 'En Proceso' && estado === 'Terminada') {
-
-        const totalProgramado = orden.detallesMatriz.reduce(
-          (sum, d) => sum + Number(d.cantidadProgramada),
-          0,
-        );
-
-        // 👉 Cantidad REAL de prendas buenas (la ingresa el usuario al cerrar).
-        //    Si no la manda, asumimos que salió todo lo programado.
-        const cantidadRealProducida =
-          extra?.cantidadRealProducida != null
-            ? Number(extra.cantidadRealProducida)
-            : totalProgramado;
-
-        if (cantidadRealProducida <= 0) {
-          throw new BadRequestException(
-            'La cantidad real producida debe ser mayor a 0 para cerrar la orden.',
-          );
-        }
-        if (cantidadRealProducida > totalProgramado) {
-          throw new BadRequestException(
-            `La cantidad real (${cantidadRealProducida}) no puede superar lo programado (${totalProgramado}).`,
-          );
-        }
-
-        // 🔥 RECÁLCULO DEL COSTO REAL
-        // La inversión total (insumos + mano de obra + CIF) se reparte ahora
-        // entre las prendas que DE VERDAD salieron buenas, no entre las programadas.
-        let costoRealUnitario = 0;
-        if (orden.costeoFinal) {
-          const inversionTotal =
-            Number(orden.costeoFinal.costoTotalUnitarioNeto) * totalProgramado;
-
-          costoRealUnitario = inversionTotal / cantidadRealProducida;
-
-          // Márgenes: se respetan los guardados, salvo que el usuario los reajuste al cerrar.
-          const margenMay =
-            extra?.margenMayorista != null
-              ? this.normalizarMargen(extra.margenMayorista, 0.35)
-              : Number(orden.costeoFinal.margenMayorista);
-          const margenMin =
-            extra?.margenMinorista != null
-              ? this.normalizarMargen(extra.margenMinorista, 0.70)
-              : Number(orden.costeoFinal.margenMinorista);
-
-          await tx.ordenCosteoFinal.update({
-            where: { ordenId: orden.id },
-            data: {
-              loteProducidoReal: cantidadRealProducida,
-              costoTotalUnitarioNeto: costoRealUnitario,
-              margenMayorista: margenMay,
-              margenMinorista: margenMin,
-              precioMayorista: costoRealUnitario * (1 + margenMay),
-              precioMinorista: costoRealUnitario * (1 + margenMin),
-            },
-          });
-        }
-
-        // Ingreso de productos terminados al almacén (bodega activa)
-        const bodegaPrincipal = await tx.bodega.findFirst({
-          where: { estado: true },
-        });
-
-        if (!bodegaPrincipal) {
-          throw new BadRequestException(
-            'No se encontró ninguna Bodega activa para guardar los productos. Crea una bodega primero.',
-          );
-        }
-
-        // 🔥 KARDEX VALORIZADO: el ingreso se reparte por variante (color/talla).
-        // Repartimos las prendas BUENAS proporcionalmente a lo programado de cada
-        // variante, para no inventar de qué talla salió cada falla. La última
-        // variante recibe el ajuste de redondeo para que el total cuadre exacto.
-        const variantes = orden.detallesMatriz;
-        let prendasRepartidas = 0;
-        for (let i = 0; i < variantes.length; i++) {
-          const detalle = variantes[i];
-          const progVariante = Number(detalle.cantidadProgramada);
-
-          let cantidadVariante: number;
-          if (i === variantes.length - 1) {
-            // última variante: recibe el resto para cuadrar el total exacto
-            cantidadVariante = cantidadRealProducida - prendasRepartidas;
-          } else {
-            cantidadVariante = Math.round(
-              (progVariante / totalProgramado) * cantidadRealProducida,
-            );
-          }
-          prendasRepartidas += cantidadVariante;
-
-          if (cantidadVariante <= 0) continue;
-
-          await this.kardex.registrarIngreso(tx, {
-            productoId: orden.productoId,
-            color: (detalle as any).color,
-            talla: (detalle as any).talla,
-            bodegaId: bodegaPrincipal.id,
-            cantidad: cantidadVariante,
-            costoUnitario: costoRealUnitario, // 🔥 costo REAL por prenda
-            motivo: `Producción terminada - ${orden.codigoOp}`,
-            tipoMovimiento: 'INGRESO',
+          await this.insumoKardex.registrarIngreso(tx, {
+            insumoId: item.insumoId,
+            cantidad: totalDevolver,
+            costoUnitario: Number(item.insumo.costoUnitario),
+            motivo: `Devolución por anulación OP - ${orden.codigoOp}`,
+            tipoMovimiento: 'DEVOLUCION',
             referenciaId: orden.id,
-            actualizarStockFisico: true, // actualiza InventarioTerminado
           });
         }
       }
+
+      // 🟢 NOTA: El ingreso de prendas al almacén y el recálculo de costo real
+      // YA NO ocurren aquí. Ahora se hacen en recepcionar() (Recepción de Taller),
+      // que registra Buenas/Lavado/Falla por variante. Así evitamos duplicar stock.
+      // Este método solo cambia el estado (Anular devuelve insumos arriba).
 
       // Actualizamos el estado visual en la DB
       return tx.ordenProduccion.update({
         where: { id },
         data: { estado },
       });
+    });
+  }
+
+  // ====================================================================
+  // 5. BUSCAR ORDEN POR CÓDIGO (para la pantalla de Recepción de Taller)
+  // ====================================================================
+  async buscarPorCodigo(codigo: string) {
+    const orden = await this.prisma.ordenProduccion.findUnique({
+      where: { codigoOp: codigo },
+      include: {
+        producto: true,
+        detallesMatriz: true,
+        rutas: { include: { taller: true }, orderBy: { ordenSecuencia: 'asc' } },
+        costeoFinal: true,
+      },
+    });
+
+    if (!orden) {
+      throw new BadRequestException(`No existe la Orden de Producción "${codigo}".`);
+    }
+    if (orden.estado === 'Terminada') {
+      throw new BadRequestException(`La orden "${codigo}" ya fue recepcionada/terminada.`);
+    }
+    if (orden.estado === 'Anulada') {
+      throw new BadRequestException(`La orden "${codigo}" está anulada.`);
+    }
+    return orden;
+  }
+
+  // ====================================================================
+  // 6. RECEPCIONAR DESDE TALLER (ESCANEO CON PISTOLA, 3 CLASIFICACIONES)
+  // ====================================================================
+  // Por variante (color/talla) se cuenta cuántas prendas son:
+  //   - Buenas    -> ingresan al almacén destino (stock vendible)
+  //   - Falla     -> ingresan a la bodega de Merma (si existe)
+  //   - Derivar   -> NO entran al almacén; se envían de vuelta a otro
+  //                  taller/lavado (se genera una Guía de Salida).
+  // El costo real por prenda = inversión total / prendas aprovechables
+  // (buenas + derivadas, porque ambas terminarán siendo producto vendible).
+  // Si quedan prendas derivadas, la orden sigue ABIERTA (vuelve "En Proceso")
+  // para poder recepcionar el resto cuando regresen; si no, se marca Terminada.
+  // ====================================================================
+  async recepcionar(id: number, dto: any) {
+    return this.prisma.$transaction(async (tx) => {
+      const orden = await tx.ordenProduccion.findUnique({
+        where: { id },
+        include: { detallesMatriz: true, costeoFinal: true },
+      });
+
+      if (!orden) throw new BadRequestException('Orden no encontrada.');
+      if (orden.estado === 'Terminada')
+        throw new BadRequestException('Esta orden ya fue recepcionada.');
+
+      const items = Array.isArray(dto.items) ? dto.items : [];
+      if (items.length === 0)
+        throw new BadRequestException('No se enviaron prendas para recepcionar.');
+
+      // Normalizamos y sumamos
+      let totalBuenas = 0;
+      let totalFalla = 0;
+      let totalDerivar = 0;
+      const normalizados = items.map((it: any) => {
+        const buenas = Number(it.cantidadBuena) || 0;
+        const falla = Number(it.cantidadFalla) || 0;
+        const derivar = Number(it.cantidadDerivar) || 0;
+        totalBuenas += buenas;
+        totalFalla += falla;
+        totalDerivar += derivar;
+        return { color: String(it.color), talla: String(it.talla), buenas, falla, derivar };
+      });
+
+      const totalRecibido = totalBuenas + totalFalla + totalDerivar;
+      if (totalRecibido <= 0) {
+        throw new BadRequestException('Debes registrar al menos una prenda escaneada.');
+      }
+
+      const totalProgramado = orden.detallesMatriz.reduce(
+        (sum, d) => sum + Number(d.cantidadProgramada),
+        0,
+      );
+
+      // 🔥 COSTO REAL: la inversión total se reparte entre las prendas aprovechables
+      // (buenas + derivadas). Si todo fue merma, se reparte entre lo recibido.
+      const aprovechables = totalBuenas + totalDerivar;
+      const divisorCosto = aprovechables > 0 ? aprovechables : totalRecibido;
+
+      let costoRealUnitario = 0;
+      if (orden.costeoFinal) {
+        const inversionTotal =
+          Number(orden.costeoFinal.costoTotalUnitarioNeto) * totalProgramado;
+        costoRealUnitario = inversionTotal / divisorCosto;
+
+        const margenMay = Number(orden.costeoFinal.margenMayorista);
+        const margenMin = Number(orden.costeoFinal.margenMinorista);
+
+        await tx.ordenCosteoFinal.update({
+          where: { ordenId: orden.id },
+          data: {
+            loteProducidoReal: aprovechables,
+            costoTotalUnitarioNeto: costoRealUnitario,
+            precioMayorista: costoRealUnitario * (1 + margenMay),
+            precioMinorista: costoRealUnitario * (1 + margenMin),
+          },
+        });
+      }
+
+      // Bodega destino para prendas buenas
+      let bodegaDestino = dto.bodegaId
+        ? await tx.bodega.findUnique({ where: { id: Number(dto.bodegaId) } })
+        : null;
+      if (!bodegaDestino) {
+        bodegaDestino = await tx.bodega.findFirst({
+          where: { estado: true, tipo: { not: 'Merma' } },
+        });
+      }
+      if (!bodegaDestino) {
+        throw new BadRequestException(
+          'No se encontró una bodega activa para guardar las prendas buenas.',
+        );
+      }
+
+      // Bodega de merma (opcional): solo si existe una de tipo 'Merma'
+      const bodegaMerma = await tx.bodega.findFirst({
+        where: { estado: true, tipo: 'Merma' },
+      });
+
+      // Ingresamos por variante: buenas -> almacén, falla -> merma
+      for (const v of normalizados) {
+        if (v.buenas > 0) {
+          await this.kardex.registrarIngreso(tx, {
+            productoId: orden.productoId,
+            color: v.color,
+            talla: v.talla,
+            bodegaId: bodegaDestino.id,
+            cantidad: v.buenas,
+            costoUnitario: costoRealUnitario,
+            motivo: `Recepción taller - ${orden.codigoOp}`,
+            tipoMovimiento: 'INGRESO',
+            referenciaId: orden.id,
+            actualizarStockFisico: true,
+          });
+        }
+        if (v.falla > 0 && bodegaMerma) {
+          await this.kardex.registrarIngreso(tx, {
+            productoId: orden.productoId,
+            color: v.color,
+            talla: v.talla,
+            bodegaId: bodegaMerma.id,
+            cantidad: v.falla,
+            costoUnitario: costoRealUnitario,
+            motivo: `Merma recepción - ${orden.codigoOp}`,
+            tipoMovimiento: 'MERMA',
+            referenciaId: orden.id,
+            actualizarStockFisico: true,
+          });
+        }
+      }
+
+      // DERIVADAS: no entran al almacén. Si se eligió un taller destino,
+      // generamos una Guía de Salida para reenviarlas a re-proceso.
+      let guiaDerivacion: string | null = null;
+      if (totalDerivar > 0 && dto.derivarTallerId) {
+        const taller = await tx.proveedorTaller.findUnique({
+          where: { id: Number(dto.derivarTallerId) },
+        });
+        if (!taller) throw new BadRequestException('El taller de derivación no existe.');
+
+        const correlativo = `DER-${Date.now().toString().slice(-6)}`;
+        await tx.guiaServicio.create({
+          data: {
+            correlativo,
+            tipoGuia: 'Salida',
+            estado: 'En Transito',
+            ordenId: orden.id,
+            tallerId: taller.id,
+            detalles: {
+              create: normalizados
+                .filter((v) => v.derivar > 0)
+                .map((v) => ({
+                  color: v.color,
+                  talla: v.talla,
+                  cantidadEnviada: v.derivar,
+                })),
+            },
+          },
+        });
+        guiaDerivacion = correlativo;
+      }
+
+      // Estado: si quedan prendas derivadas (en re-proceso), la orden sigue abierta;
+      // si no, se finaliza.
+      const nuevoEstado = totalDerivar > 0 ? 'En Proceso' : 'Terminada';
+      await tx.ordenProduccion.update({
+        where: { id },
+        data: { estado: nuevoEstado },
+      });
+
+      return {
+        mensaje:
+          totalDerivar > 0
+            ? 'Recepción registrada. Quedan prendas derivadas a re-proceso (orden sigue abierta).'
+            : 'Recepción registrada y orden finalizada.',
+        codigoOp: orden.codigoOp,
+        prendasBuenas: totalBuenas,
+        prendasMerma: totalFalla,
+        prendasDerivadas: totalDerivar,
+        mermaRegistrada: totalFalla > 0 ? (bodegaMerma ? 'Sí' : 'No hay bodega de Merma') : 'N/A',
+        guiaDerivacion: guiaDerivacion || (totalDerivar > 0 ? 'Sin taller asignado (solo registro)' : null),
+        costoRealUnitario: Number(costoRealUnitario.toFixed(4)),
+        bodegaDestino: bodegaDestino.nombre,
+        estadoOrden: nuevoEstado,
+      };
     });
   }
 

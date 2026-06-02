@@ -66,6 +66,7 @@ model Insumo {
   
   boms            ProductoBom[]
   detallesCompra  CompraDetalle[]
+  movimientos     MovimientoInsumo[]
 }
 
 model ProveedorTaller {
@@ -459,6 +460,32 @@ model CostoPromedioProducto {
   producto      Producto @relation(fields: [productoId], references: [id])
 
   @@unique([productoId, color, talla])
+}
+
+// ==========================================
+// 8. KARDEX DE INSUMOS (AVÍOS Y TELA)
+// ==========================================
+// Historial de movimientos de cada insumo.
+// Se genera en cada compra (INGRESO) y en cada
+// consumo por orden de producción (SALIDA).
+// Permite saber cuánto se consumió por orden,
+// cuándo y por qué, sin depender del campo
+// stockActual como única fuente de verdad.
+model MovimientoInsumo {
+  id              Int      @id @default(autoincrement())
+  tipoMovimiento  String   // 'INGRESO', 'SALIDA', 'AJUSTE', 'DEVOLUCION'
+  motivo          String   // Ej: 'Compra FAC-001', 'OP-2026-001', 'Anulación OP'
+  cantidad        Decimal  @db.Decimal(12, 4) // positivo=ingreso, negativo=salida
+  fecha           DateTime @default(now())
+  referenciaId    Int?     // ID de la Compra o de la OrdenProduccion
+
+  insumoId        Int
+  insumo          Insumo   @relation(fields: [insumoId], references: [id])
+
+  // Saldo y costo al momento del movimiento (para auditoría completa)
+  costoUnitario   Decimal  @db.Decimal(12, 4)
+  costoTotal      Decimal  @db.Decimal(14, 4)
+  saldoResultante Decimal  @db.Decimal(12, 4) // stockActual después del movimiento
 }
 
 model Proveedor {

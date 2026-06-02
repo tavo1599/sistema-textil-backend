@@ -6,11 +6,15 @@ export class RolesGuard implements CanActivate {
   constructor(private reflector: Reflector) {}
 
   canActivate(context: ExecutionContext): boolean {
-    // Busca si la ruta tiene el decorador @SetMetadata('roles', [...])
-    const rolesRequeridos = this.reflector.get<string[]>('roles', context.getHandler());
-    
+    // Busca el decorador @Roles(...) tanto a nivel de MÉTODO como de CLASE.
+    // (Antes solo miraba el método, así que @Roles en el controller no se aplicaba.)
+    const rolesRequeridos = this.reflector.getAllAndOverride<string[]>('roles', [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+
     // Si no hay roles requeridos, deja pasar a todos
-    if (!rolesRequeridos) {
+    if (!rolesRequeridos || rolesRequeridos.length === 0) {
       return true;
     }
 

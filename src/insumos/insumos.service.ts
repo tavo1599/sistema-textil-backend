@@ -1,9 +1,13 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { InsumoKardexService } from '../kardex/insumo-kardex.service';
 
 @Injectable()
 export class InsumosService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private insumoKardex: InsumoKardexService,
+  ) {}
 
   // 1. CREAR
   async create(data: any) {
@@ -11,15 +15,35 @@ export class InsumosService {
     const existe = await this.prisma.insumo.findUnique({ where: { codigo: data.codigo } });
     if (existe) throw new BadRequestException(`El código ${data.codigo} ya está registrado.`);
 
-    return this.prisma.insumo.create({
-      data: {
-        codigo: data.codigo,
-        nombre: data.nombre,
-        tipo: data.tipo,
-        unidadMedida: data.unidadMedida,
-        costoUnitario: Number(data.costoUnitario),
-        stockActual: Number(data.stockActual),
+    const stockInicial = Number(data.stockActual) || 0;
+    const costoUnitario = Number(data.costoUnitario) || 0;
+
+    return this.prisma.$transaction(async (tx) => {
+      // Creamos el insumo SIN stock; el stock se carga vía kardex para dejar rastro.
+      const insumo = await tx.insumo.create({
+        data: {
+          codigo: data.codigo,
+          nombre: data.nombre,
+          tipo: data.tipo,
+          unidadMedida: data.unidadMedida,
+          costoUnitario: costoUnitario,
+          stockActual: 0,
+        },
+      });
+
+      // Si trae stock inicial, lo registramos como INGRESO en el kardex
+      // (esto también deja stockActual en el valor correcto).
+      if (stockInicial > 0) {
+        await this.insumoKardex.registrarIngreso(tx, {
+          insumoId: insumo.id,
+          cantidad: stockInicial,
+          costoUnitario: costoUnitario,
+          motivo: 'Stock inicial (alta de insumo)',
+          tipoMovimiento: 'INGRESO',
+        });
       }
+
+      return tx.insumo.findUnique({ where: { id: insumo.id } });
     });
   }
 
@@ -39,19 +63,48 @@ export class InsumosService {
 
   // 4. ACTUALIZAR (EDITAR)
   async update(id: number, data: any) {
-    // Verificamos que el insumo exista
-    await this.findOne(id);
+    const insumo = await this.findOne(id);
 
-    return this.prisma.insumo.update({
-      where: { id },
-      data: {
-        codigo: data.codigo,
-        nombre: data.nombre,
-        tipo: data.tipo,
-        unidadMedida: data.unidadMedida,
-        costoUnitario: Number(data.costoUnitario),
-        stockActual: Number(data.stockActual),
+    const stockNuevo = Number(data.stockActual);
+    const stockAnterior = Number(insumo.stockActual);
+
+    return this.prisma.$transaction(async (tx) => {
+      // Actualizamos los datos descriptivos (el stock NO se toca aquí directamente).
+      await tx.insumo.update({
+        where: { id },
+        data: {
+          codigo: data.codigo,
+          nombre: data.nombre,
+          tipo: data.tipo,
+          unidadMedida: data.unidadMedida,
+          costoUnitario: Number(data.costoUnitario),
+        },
+      });
+
+      // Si el usuario cambió el stock a mano, lo registramos como AJUSTE en el kardex,
+      // así el historial nunca se desincroniza del stock real.
+      if (!isNaN(stockNuevo) && stockNuevo !== stockAnterior) {
+        const delta = stockNuevo - stockAnterior;
+        if (delta > 0) {
+          await this.insumoKardex.registrarIngreso(tx, {
+            insumoId: id,
+            cantidad: delta,
+            costoUnitario: Number(data.costoUnitario),
+            motivo: 'Ajuste manual de stock (edición)',
+            tipoMovimiento: 'AJUSTE',
+          });
+        } else {
+          await this.insumoKardex.registrarSalida(tx, {
+            insumoId: id,
+            cantidad: Math.abs(delta),
+            costoUnitario: Number(data.costoUnitario),
+            motivo: 'Ajuste manual de stock (edición)',
+            tipoMovimiento: 'AJUSTE',
+          });
+        }
       }
+
+      return tx.insumo.findUnique({ where: { id } });
     });
   }
 

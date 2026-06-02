@@ -1,8 +1,12 @@
 import { Controller, Get, Post, Body, UseGuards, Param, Put, Query } from '@nestjs/common';
 import { AlmacenTerminadosService } from './almacen-terminados.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
 
-@UseGuards(JwtAuthGuard) // Protegemos la puerta con Token
+// Login obligatorio. El vendedor puede CONSULTAR (GET) inventario/bodegas/movimientos,
+// pero las operaciones que mueven o ajustan stock quedan restringidas a ADMIN.
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('almacen-terminados')
 export class AlmacenTerminadosController {
   // Aquí declaraste el servicio como "almacenService"
@@ -12,35 +16,42 @@ export class AlmacenTerminadosController {
   getBodegas() { return this.almacenService.getBodegas(); }
 
   @Post('bodegas')
+  @Roles('ADMIN')
   createBodega(@Body() body: any) { return this.almacenService.createBodega(body); }
 
   @Get('inventario')
   getInventario() { return this.almacenService.getInventario(); }
 
   @Post('inventario')
+  @Roles('ADMIN')
   addInventario(@Body() body: any) { return this.almacenService.addInventario(body); }
 
   @Post('traslado')
-  realizarTraslado(@Body() body: any) { 
-    return this.almacenService.transferirInventario(body); 
+  @Roles('ADMIN')
+  realizarTraslado(@Body() body: any) {
+    return this.almacenService.transferirInventario(body);
   }
 
   @Post('salida')
-  registrarSalida(@Body() body: any) { 
-    return this.almacenService.registrarSalida(body); 
+  @Roles('ADMIN')
+  registrarSalida(@Body() body: any) {
+    return this.almacenService.registrarSalida(body);
   }
 
   @Put('bodegas/:id')
-  updateBodega(@Param('id') id: string, @Body() body: any) { 
-    return this.almacenService.updateBodega(Number(id), body); 
+  @Roles('ADMIN')
+  updateBodega(@Param('id') id: string, @Body() body: any) {
+    return this.almacenService.updateBodega(Number(id), body);
   }
 
   @Post('revertir-ingreso')
+  @Roles('ADMIN')
   revertirIngreso(@Body() body: any) {
     return this.almacenService.revertirIngreso(body);
   }
 
   @Post('ajustar-stock')
+  @Roles('ADMIN')
   ajustarStock(@Body() body: any) {
     return this.almacenService.ajustarStockManual(body);
   }

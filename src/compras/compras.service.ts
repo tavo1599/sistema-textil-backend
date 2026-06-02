@@ -1,12 +1,14 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service'; // Ajuste la ruta según su proyecto
+import { Injectable } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
 import { KardexService } from '../kardex/kardex.service';
+import { InsumoKardexService } from '../kardex/insumo-kardex.service';
 
 @Injectable()
 export class ComprasService {
   constructor(
     private prisma: PrismaService,
     private kardex: KardexService,
+    private insumoKardex: InsumoKardexService,
   ) {}
 
   async obtenerProveedores() {
@@ -62,9 +64,13 @@ async registrarCompra(data: any) {
       for (const detalle of data.detalles) {
         
         if (detalle.tipoItem === 'INSUMO') {
-          await tx.insumo.update({
-            where: { id: Number(detalle.insumoId) },
-            data: { stockActual: { increment: Number(detalle.cantidad) } },
+          await this.insumoKardex.registrarIngreso(tx, {
+            insumoId: Number(detalle.insumoId),
+            cantidad: Number(detalle.cantidad),
+            costoUnitario: Number(detalle.costoUnitario),
+            motivo: `COMPRA - ${data.correlativo}`,
+            tipoMovimiento: 'INGRESO',
+            referenciaId: nuevaCompra.id,
           });
         } 
         

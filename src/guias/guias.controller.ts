@@ -5,10 +5,13 @@ import { GuiasService } from './guias.service';
 import { CreateGuiaDto } from './dto/create-guia.dto';
 import { PdfService } from '../common/pdf.service'; // Asegúrate de haber creado este archivo
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
 
 @ApiTags('Guías de Remisión y Documentos') // Organiza en Swagger
 @ApiBearerAuth() // Candado de seguridad
-@UseGuards(JwtAuthGuard) // Exige el Token
+@UseGuards(JwtAuthGuard, RolesGuard) // Exige el Token y rol
+@Roles('ADMIN')
 @Controller('guias')
 export class GuiasController {
   // Aquí inyectamos AMBOS servicios: el de base de datos y el de PDFs

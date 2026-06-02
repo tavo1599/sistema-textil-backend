@@ -72,7 +72,7 @@ export class VentasService {
       // ========================================================
       // 3. CREAR CABECERA Y DETALLES DE LA VENTA
       // ========================================================
-      const correlativoVenta = `VEN-${Date.now().toString().slice(-6)}`;
+      const correlativoVenta = await this.generarCorrelativo(tx);
       const metodoEntregaFinal = dto.metodoEntrega || (dto.requiereEnvio ? 'ENVIO_AGENCIA' : 'ENTREGA_INMEDIATA');
 
       let estadoPagoFinal = 'PENDIENTE';
@@ -307,5 +307,25 @@ export class VentasService {
       stockDisponible: inventarioFisico.stock,
       bodegaId: inventarioFisico.bodegaId
     };
+  }
+
+  // ========================================================
+  // PRIVADO: correlativo secuencial seguro dentro de una tx
+  // Lee el último número registrado y suma 1, evitando
+  // colisiones si dos ventas se registran al mismo tiempo.
+  // ========================================================
+  private async generarCorrelativo(tx: any): Promise<string> {
+    const ultima = await tx.venta.findFirst({
+      orderBy: { id: 'desc' },
+      select: { correlativo: true },
+    });
+
+    let siguiente = 1;
+    if (ultima?.correlativo) {
+      const match = ultima.correlativo.match(/(\d+)$/);
+      if (match) siguiente = parseInt(match[1], 10) + 1;
+    }
+
+    return `VEN-${String(siguiente).padStart(6, '0')}`;
   }
 }
