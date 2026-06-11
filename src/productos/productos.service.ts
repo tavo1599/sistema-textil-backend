@@ -15,6 +15,11 @@ export class ProductosService {
         skuBase: data.skuBase,
         nombre: data.nombre,
         categoria: data.categoria,
+        // Campos de tienda online (opcionales al crear)
+        publicadoWeb: data.publicadoWeb ?? false,
+        descripcionWeb: data.descripcionWeb ?? null,
+        imagenUrl: data.imagenUrl ?? null,
+        precioWeb: data.precioWeb != null ? Number(data.precioWeb) : 0,
       }
     });
   }
@@ -60,6 +65,11 @@ export class ProductosService {
         skuBase: data.skuBase,
         nombre: data.nombre,
         categoria: data.categoria,
+        // Campos de tienda online (solo se tocan si vienen en el payload)
+        ...(data.publicadoWeb !== undefined ? { publicadoWeb: data.publicadoWeb } : {}),
+        ...(data.descripcionWeb !== undefined ? { descripcionWeb: data.descripcionWeb } : {}),
+        ...(data.imagenUrl !== undefined ? { imagenUrl: data.imagenUrl } : {}),
+        ...(data.precioWeb !== undefined ? { precioWeb: Number(data.precioWeb) } : {}),
       },
     });
   }

@@ -42,6 +42,7 @@ model Producto {
   publicadoWeb Boolean @default(false)
   descripcionWeb String?
   imagenUrl      String?
+  precioWeb      Decimal @default(0.00) @db.Decimal(10, 2) // Precio público oficial para la tienda online
 
   boms        ProductoBom[]
   ordenes     OrdenProduccion[]
@@ -53,6 +54,174 @@ model Producto {
   movimientos   MovimientoInventario[]
   detallesCompra  CompraDetalle[]
   costosPromedio  CostoPromedioProducto[]
+  imagenes        ProductoImagen[]
+}
+
+// Pedido hecho desde la tienda online. Queda PENDIENTE hasta que el admin
+// coordina el pago y lo procesa. NO descuenta stock automáticamente.
+model PedidoWeb {
+  id            Int      @id @default(autoincrement())
+  codigo        String   @unique
+  clienteNombre String
+  documento     String?
+  telefono      String
+  email         String?
+  direccion     String?
+  metodoEntrega String   @default("ENVIO")     // 'ENVIO' | 'RECOJO'
+  metodoPago    String?                        // 'YAPE' | 'PLIN' | 'TRANSFERENCIA'
+  voucherUrl    String?                        // foto del comprobante de pago
+  notas         String?
+  cuponCodigo   String?                        // código promocional aplicado
+  descuento     Decimal  @default(0.00) @db.Decimal(10, 2) // monto descontado
+  subtotal      Decimal  @default(0.00) @db.Decimal(10, 2) // total antes del descuento
+  total         Decimal  @db.Decimal(10, 2)    // total final (subtotal - descuento)
+  estado        String   @default("PENDIENTE") // PENDIENTE, CONFIRMADO, DESPACHADO, ENTREGADO, ANULADO
+  fecha         DateTime @default(now())
+
+  // Cuando se confirma, el pedido se convierte en una Venta real (descuenta stock).
+  // Guardamos el id de la venta para no convertirlo dos veces.
+  ventaId       Int?
+
+  detalles      PedidoWebDetalle[]
+}
+
+model PedidoWebDetalle {
+  id             Int       @id @default(autoincrement())
+  pedidoId       Int
+  pedido         PedidoWeb @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
+
+  productoId     Int
+  nombre         String
+  color          String
+  talla          String
+  cantidad       Int
+  precioUnitario Decimal   @db.Decimal(10, 2)
+  subtotal       Decimal   @db.Decimal(10, 2)
+}
+
+// Códigos promocionales / cupones de descuento para la tienda online.
+model CuponDescuento {
+  id        Int       @id @default(autoincrement())
+  codigo    String    @unique // se compara en MAYÚSCULAS, ej. BIENVENIDA10
+  tipo      String    @default("PORCENTAJE") // 'PORCENTAJE' | 'MONTO'
+  valor     Decimal   @db.Decimal(10, 2)     // 10 (=10%) o 20.00 (=S/20)
+  minCompra Decimal   @default(0.00) @db.Decimal(10, 2) // compra mínima para aplicar
+  maxUsos   Int?      // límite total de usos (null = ilimitado)
+  usos      Int       @default(0)
+  vence     DateTime? // fecha de vencimiento (null = sin vencimiento)
+  activo    Boolean   @default(true)
+}
+
+// Libro de Reclamaciones virtual (Indecopi). Cada hoja es un reclamo o queja.
+model Reclamacion {
+  id              Int      @id @default(autoincrement())
+  codigo          String   @unique // Hoja de Reclamación, ej. HR-00001
+  fecha           DateTime @default(now())
+
+  // Identificación del consumidor
+  nombre          String
+  documento       String?
+  telefono        String?
+  email           String?
+  direccion       String?
+  menorEdad       Boolean  @default(false)
+
+  // Identificación del bien contratado
+  tipoBien        String?  // 'PRODUCTO' | 'SERVICIO'
+  montoReclamado  String?
+  descripcionBien String?
+  pedidoCodigo    String?  // referencia opcional al pedido WEB-xxxxx
+
+  // Detalle
+  tipo            String   // 'RECLAMO' | 'QUEJA'
+  detalle         String   // descripción del reclamo/queja
+  pedidoConsumidor String? // pedido o solicitud del consumidor
+
+  // Gestión interna
+  estado          String   @default("PENDIENTE") // PENDIENTE, ATENDIDO
+  respuesta       String?
+}
+
+// Reseñas de clientes para la tienda online (editables desde el admin).
+model Resena {
+  id        Int     @id @default(autoincrement())
+  nombre    String
+  texto     String
+  estrellas Int     @default(5)
+  orden     Int     @default(0)
+  activo    Boolean @default(true)
+}
+
+// Banner promocional (imagen + texto + botón). Editable desde el admin.
+model BannerPromo {
+  id         Int     @id @default(autoincrement())
+  url        String
+  titulo     String?
+  subtitulo  String?
+  textoBoton String?
+  enlace     String?
+  orden      Int     @default(0)
+  activo     Boolean @default(true)
+}
+
+// Configuración general de la tienda (una sola fila, id=1). WhatsApp, redes, contacto.
+model ConfigTienda {
+  id        Int     @id @default(1)
+  whatsapp  String?
+  instagram String?
+  facebook  String?
+  email     String?
+  direccion String?
+  horario   String?
+  // Datos de pago que ve el cliente al comprar
+  yape          String?  // número Yape
+  plin          String?  // número Plin
+  cuentaBanco   String?  // banco + número de cuenta / CCI
+  titularCuenta String?  // nombre del titular
+  // Marca y datos legales (para términos, privacidad, footer)
+  logo          String?  // URL del logo de la tienda
+  razonSocial   String?  // razón social de la empresa
+  ruc           String?  // RUC
+}
+
+// Publicaciones tipo Instagram/reels para la tienda (foto o video propio).
+// Administrable desde el admin (no depende de la API de Instagram).
+model Publicacion {
+  id        Int      @id @default(autoincrement())
+  tipo      String   @default("imagen") // 'imagen' | 'video'
+  url       String
+  caption   String?
+  enlace    String?  // enlace al post real de Instagram (opcional)
+  orden     Int      @default(0)
+  activo    Boolean  @default(true)
+  fecha     DateTime @default(now())
+}
+
+// Slides de la portada/carrusel de la tienda online (imágenes o videos).
+model HeroSlide {
+  id        Int      @id @default(autoincrement())
+  tipo      String   @default("imagen") // 'imagen' | 'video'
+  url       String
+  titulo    String?
+  subtitulo String?
+  enlace    String?  // a dónde lleva el slide (ej. /tienda?categoria=Polos)
+  orden     Int      @default(0)
+  activo    Boolean  @default(true)
+}
+
+// Galería de imágenes de un producto para la tienda online.
+// color = null  -> imagen general (portada / sin color específico)
+// color = "AZUL" -> foto del producto en ese color (para el cambio de color)
+model ProductoImagen {
+  id         Int      @id @default(autoincrement())
+  url        String
+  color      String?
+  orden      Int      @default(0)
+
+  productoId Int
+  producto   Producto @relation(fields: [productoId], references: [id], onDelete: Cascade)
+
+  @@index([productoId])
 }
 
 model Insumo {

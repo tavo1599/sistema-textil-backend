@@ -29,6 +29,9 @@ import { CobranzasModule } from './cobranzas/cobranzas.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { ComprasModule } from './compras/compras.module';
 import { UsuariosModule } from './usuarios/usuarios.module';
+import { TiendaModule } from './tienda/tienda.module';
+import { MediaModule } from './media/media.module';
+import { EmailModule } from './email/email.module';
 
 @Module({
   imports: [
@@ -46,9 +49,11 @@ import { UsuariosModule } from './usuarios/usuarios.module';
     AuthModule,
     ColoresModule,
     // 3. Configuramos la carpeta "uploads" para que sea pública
+    // Usamos process.cwd() (raíz del proyecto) porque ahí guarda multer ('./uploads')
+    // y porque main.js compila en dist/src, lo que rompía el join con __dirname.
     ServeStaticModule.forRoot({
-      rootPath: join(__dirname, '..', 'uploads'),
-      serveRoot: '/uploads', 
+      rootPath: join(process.cwd(), 'uploads'),
+      serveRoot: '/uploads',
     }),
     AlmacenTerminadosModule,
     DespachosModule,
@@ -57,6 +62,9 @@ import { UsuariosModule } from './usuarios/usuarios.module';
     DashboardModule,
     ComprasModule,
     UsuariosModule,
+    TiendaModule,
+    MediaModule,
+    EmailModule,
   ],
   // 4. Registramos el controlador para que Swagger lo detecte
   controllers: [AppController, ArchivosController],
