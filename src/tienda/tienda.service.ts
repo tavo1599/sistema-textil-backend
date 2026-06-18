@@ -691,31 +691,52 @@ export class TiendaService {
     }
     const variantes = [...mapa.values()];
 
-    // Imágenes agrupadas por color (para el cambio de color en el detalle).
-    // Las de color = null se consideran "generales" (portada).
+    // Imágenes agrupadas por color. Las de color = null son "generales" (portada).
     const galeria = ((producto as any).imagenes ?? []) as { url: string; color: string | null }[];
     const generales = galeria.filter((g) => !g.color).map((g) => g.url);
-    const imagenesPorColor: Record<string, string[]> = {};
-    for (const g of galeria) {
-      if (g.color) {
-        (imagenesPorColor[g.color] ??= []).push(g.url);
-      }
-    }
     const imagenPrincipal =
       generales[0] ?? galeria[0]?.url ?? producto.imagenUrl ?? producto.imagenLocal ?? null;
 
-    // Hex de cada color (para los puntitos de color en el frontend)
-    const nombresColores = [...new Set(variantes.map((v) => v.color))];
-    const coloresDb = nombresColores.length
-      ? await this.prisma.color.findMany({
-          where: { OR: [{ nombre: { in: nombresColores } }, { codigo: { in: nombresColores } }] },
-          select: { nombre: true, codigo: true, codigoHex: true },
-        })
-      : [];
-    const coloresInfo = nombresColores.map((nombre) => {
-      const c = coloresDb.find((x) => x.nombre === nombre || x.codigo === nombre);
-      return { nombre, hex: c?.codigoHex || null };
+    // 🔑 PROBLEMA: las variantes guardan el color como CÓDIGO (ej. "NGR") y las
+    // fotos como NOMBRE (ej. "NEGRO"). Traducimos todo a un mismo valor (el de la
+    // variante) usando la tabla de colores, para que la foto cambie según el color.
+    const norm = (s: any) =>
+      String(s ?? '').trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    const todosColores = await this.prisma.color.findMany({
+      select: { nombre: true, codigo: true, codigoHex: true },
     });
+
+    const varianteColores = [...new Set(variantes.map((v) => v.color))];
+    const indiceAVariante = new Map<string, string>(); // normalizado (código o nombre) -> color de variante
+    const hexPorVariante = new Map<string, string | null>();
+    const nombrePorVariante = new Map<string, string>();
+    for (const vc of varianteColores) {
+      const c = todosColores.find((x) => norm(x.codigo) === norm(vc) || norm(x.nombre) === norm(vc));
+      indiceAVariante.set(norm(vc), vc);
+      if (c) {
+        indiceAVariante.set(norm(c.codigo), vc);
+        indiceAVariante.set(norm(c.nombre), vc);
+        hexPorVariante.set(vc, c.codigoHex || null);
+        nombrePorVariante.set(vc, c.nombre);
+      } else {
+        nombrePorVariante.set(vc, vc);
+      }
+    }
+
+    // Re-llaveamos las fotos al color de variante (traduce nombre <-> código)
+    const imagenesPorColor: Record<string, string[]> = {};
+    for (const g of galeria) {
+      if (!g.color) continue;
+      const clave = indiceAVariante.get(norm(g.color)) ?? g.color;
+      (imagenesPorColor[clave] ??= []).push(g.url);
+    }
+
+    const nombresColores = varianteColores;
+    const coloresInfo = varianteColores.map((vc) => ({
+      valor: vc, // lo que se usa para seleccionar/pedir (coincide con las fotos)
+      nombre: nombrePorVariante.get(vc) || vc, // nombre bonito para mostrar
+      hex: hexPorVariante.get(vc) || null,
+    }));
 
     return {
       id: producto.id,
