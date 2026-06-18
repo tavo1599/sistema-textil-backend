@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import sharp from 'sharp';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -62,32 +63,45 @@ export class MediaService {
     return `/uploads/${carpeta}/${filename}`;
   }
 
-  // 🔜 CLOUDFLARE R2 (S3-compatible). Para activarlo:
-  //   1) npm i @aws-sdk/client-s3
-  //   2) Configura en .env: STORAGE_DRIVER=r2, R2_ENDPOINT (https://<accountid>.r2.cloudflarestorage.com),
-  //      R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET, R2_PUBLIC_URL (dominio público del bucket).
-  //   3) Descomenta el bloque de abajo.
-  private async escribirR2(carpeta: string, filename: string, data: Buffer, contentType: string): Promise<string> {
-    /*
-    const { S3Client, PutObjectCommand } = await import('@aws-sdk/client-s3');
-    const client = new S3Client({
+  // ☁️ CLOUDFLARE R2 (S3-compatible). Se activa con STORAGE_DRIVER=r2 + las variables R2_* del .env.
+  private r2Client: S3Client | null = null;
+
+  private getR2Client(): S3Client {
+    if (this.r2Client) return this.r2Client;
+
+    const endpoint = process.env.R2_ENDPOINT;
+    const accessKeyId = process.env.R2_ACCESS_KEY_ID;
+    const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
+    if (!endpoint || !accessKeyId || !secretAccessKey || !process.env.R2_BUCKET || !process.env.R2_PUBLIC_URL) {
+      throw new Error(
+        'STORAGE_DRIVER=r2 pero faltan variables. Configura en .env: R2_ENDPOINT, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET, R2_PUBLIC_URL.',
+      );
+    }
+
+    this.r2Client = new S3Client({
       region: 'auto',
-      endpoint: process.env.R2_ENDPOINT,
-      credentials: {
-        accessKeyId: process.env.R2_ACCESS_KEY_ID!,
-        secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
-      },
+      endpoint,
+      credentials: { accessKeyId, secretAccessKey },
     });
+    return this.r2Client;
+  }
+
+  private async escribirR2(carpeta: string, filename: string, data: Buffer, contentType: string): Promise<string> {
+    const client = this.getR2Client();
     const key = `${carpeta}/${filename}`;
-    await client.send(new PutObjectCommand({
-      Bucket: process.env.R2_BUCKET,
-      Key: key,
-      Body: data,
-      ContentType: contentType,
-    }));
-    return `${process.env.R2_PUBLIC_URL}/${key}`;
-    */
-    throw new Error('STORAGE_DRIVER=r2 pero escribirR2() aún no está activado. Sigue las instrucciones en media.service.ts.');
+
+    await client.send(
+      new PutObjectCommand({
+        Bucket: process.env.R2_BUCKET,
+        Key: key,
+        Body: data,
+        ContentType: contentType,
+      }),
+    );
+
+    // Devolvemos la URL pública (dominio del bucket o dominio personalizado), sin doble barra.
+    const base = (process.env.R2_PUBLIC_URL || '').replace(/\/+$/, '');
+    return `${base}/${key}`;
   }
 
   private tipoContenido(filename: string): string {

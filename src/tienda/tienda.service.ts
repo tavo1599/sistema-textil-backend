@@ -4,6 +4,13 @@ import { VentasService } from '../ventas/ventas.service';
 import { EmailService } from '../email/email.service';
 
 /**
+ * Almacén que abastece la tienda web. La web solo ofrece/valida/descuenta
+ * stock de las bodegas tipo "Principal" (no de sucursales ni merma).
+ * Para mover algo a la web, se traslada al Almacén Principal.
+ */
+const BODEGA_WEB = { tipo: 'Principal' } as const;
+
+/**
  * TiendaService — Catálogo PÚBLICO para la tienda online (Nuxt).
  * Solo expone productos con publicadoWeb = true y datos seguros
  * (nunca costos internos, márgenes ni stock por bodega).
@@ -44,12 +51,12 @@ export class TiendaService {
       orderBy: { nombre: 'asc' },
     });
 
-    // Stock total disponible por producto (suma de todas las bodegas, sin merma).
+    // Stock disponible para la WEB = solo el Almacén Principal (no otros almacenes).
     const productoIds = productos.map((p) => p.id);
     const stock = productoIds.length
       ? await this.prisma.inventarioTerminado.groupBy({
           by: ['productoId'],
-          where: { productoId: { in: productoIds }, stock: { gt: 0 } },
+          where: { productoId: { in: productoIds }, stock: { gt: 0 }, bodega: BODEGA_WEB },
           _sum: { stock: true },
         })
       : [];
@@ -120,8 +127,8 @@ export class TiendaService {
       };
     });
 
-    // 🔒 VALIDACIÓN DE STOCK: nadie puede pedir más de lo que hay en almacén
-    // (suma de bodegas, sin contar merma). Acumulamos por variante por si el
+    // 🔒 VALIDACIÓN DE STOCK: nadie puede pedir más de lo que hay disponible
+    // para la web (solo Almacén Principal). Acumulamos por variante por si el
     // carrito trae el mismo producto/color/talla repetido.
     const pedidoPorVariante = new Map<string, number>();
     for (const d of detalles) {
@@ -135,7 +142,7 @@ export class TiendaService {
           productoId: Number(pid),
           color,
           talla,
-          bodega: { tipo: { not: 'Merma' } },
+          bodega: BODEGA_WEB,
         },
         _sum: { stock: true },
       });
@@ -270,16 +277,17 @@ export class TiendaService {
       throw new BadRequestException('No se puede confirmar un pedido anulado.');
     }
 
-    // Bodega desde donde se descuenta el stock
+    // Bodega desde donde se descuenta el stock: la indicada, o el Almacén Principal
+    // (que es de donde la web ofrece stock).
     let bodega = bodegaId
       ? await this.prisma.bodega.findUnique({ where: { id: Number(bodegaId) } })
       : null;
     if (!bodega) {
       bodega = await this.prisma.bodega.findFirst({
-        where: { estado: true, tipo: { not: 'Merma' } },
+        where: { estado: true, ...BODEGA_WEB },
       });
     }
-    if (!bodega) throw new BadRequestException('No hay una bodega activa para descontar el stock.');
+    if (!bodega) throw new BadRequestException('No hay un Almacén Principal activo para descontar el stock.');
 
     const requiereEnvio = pedido.metodoEntrega === 'ENVIO';
 
@@ -667,9 +675,9 @@ export class TiendaService {
     });
     if (!producto) throw new NotFoundException('Producto no disponible.');
 
-    // Variantes con stock agregado (sumando bodegas, excluyendo merma)
+    // Variantes con stock disponible para la web (solo Almacén Principal)
     const inventario = await this.prisma.inventarioTerminado.findMany({
-      where: { productoId: id, stock: { gt: 0 }, bodega: { tipo: { not: 'Merma' } } },
+      where: { productoId: id, stock: { gt: 0 }, bodega: BODEGA_WEB },
       select: { color: true, talla: true, stock: true },
     });
 
