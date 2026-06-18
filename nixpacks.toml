@@ -1,0 +1,14 @@
+# Configuración de build para Railway (Nixpacks).
+# Importante: instalamos TODAS las dependencias (incl. devDependencies como
+# @nestjs/cli, prisma y typescript) para poder COMPILAR. Sin esto, Railway instala
+# en modo producción, falta el compilador y no se genera dist/main → "Cannot find module".
+[phases.install]
+cmds = ["npm install --production=false"]
+
+# Compila NestJS a dist/ (y prisma generate ya corre en el postinstall)
+[phases.build]
+cmds = ["npm run build"]
+
+# Arranca en producción (liviano)
+[start]
+cmd = "npm run start:prod"
