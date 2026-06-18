@@ -31,7 +31,7 @@ export class ArchivosController {
       },
     },
   })
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 25 * 1024 * 1024 } }))
   async subirImagenProducto(@Param('id') id: string, @UploadedFile() file: Express.Multer.File) {
     // MediaService convierte a WebP optimizado
     const urlLocal = await this.media.guardar(file, 'productos');
@@ -53,7 +53,7 @@ export class ArchivosController {
   @Post('producto/:id/galeria')
   @ApiOperation({ summary: 'Subir foto a la galería del producto (por color)' })
   @ApiConsumes('multipart/form-data')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 25 * 1024 * 1024 } }))
   async subirImagenGaleria(
     @Param('id') id: string,
     @UploadedFile() file: Express.Multer.File,

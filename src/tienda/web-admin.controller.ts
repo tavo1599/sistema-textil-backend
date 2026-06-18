@@ -81,7 +81,7 @@ export class WebAdminController {
   listarBanners() { return this.tiendaService.listarBannersAdmin(); }
 
   @Post('banner')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 25 * 1024 * 1024 } }))
   async crearBanner(@UploadedFile() file: Express.Multer.File, @Body() body: any) {
     const url = await this.media.guardar(file, 'portada');
     return this.tiendaService.crearBanner({
@@ -120,7 +120,7 @@ export class WebAdminController {
 
   // Subir el logo de la tienda (imagen → WebP)
   @Post('logo')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 25 * 1024 * 1024 } }))
   async subirLogo(@UploadedFile() file: Express.Multer.File) {
     const url = await this.media.guardar(file, 'portada');
     await this.tiendaService.guardarLogo(url);
@@ -134,7 +134,7 @@ export class WebAdminController {
   }
 
   @Post('publicaciones')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 25 * 1024 * 1024 } }))
   async crearPublicacion(@UploadedFile() file: Express.Multer.File, @Body() body: any) {
     const url = await this.media.guardar(file, 'portada');
     const esVideo = /^video\//.test(file.mimetype || '') || /\.(mp4|webm|ogg|mov)$/i.test(file.originalname || '');
@@ -175,7 +175,7 @@ export class WebAdminController {
 
   // Sube un archivo (imagen o video) y crea el slide en un solo paso
   @Post('portada')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 25 * 1024 * 1024 } }))
   async crear(@UploadedFile() file: Express.Multer.File, @Body() body: any) {
     const url = await this.media.guardar(file, 'portada');
     // Detecta si es video por la extensión

@@ -4,6 +4,11 @@ import sharp from 'sharp';
 import * as fs from 'fs';
 import * as path from 'path';
 
+// En servidores chicos (Railway) evitamos picos de memoria: sin caché en disco
+// y procesando de a una imagen a la vez.
+sharp.cache(false);
+sharp.concurrency(1);
+
 /**
  * MediaService — guarda archivos subidos optimizando imágenes.
  *
