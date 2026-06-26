@@ -10,6 +10,22 @@ import { EmailService } from '../email/email.service';
  */
 const BODEGA_WEB = { tipo: 'Principal' } as const;
 
+// Orden natural de tallas (texto y numéricas) para mostrarlas S → XL, 28 → 38, etc.
+const ORDEN_TALLAS = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', '2XL', '3XL', '4XL'];
+function ordenarTallas(tallas: string[]): string[] {
+  return [...new Set(tallas)].sort((a, b) => {
+    const na = Number(a);
+    const nb = Number(b);
+    if (!isNaN(na) && !isNaN(nb)) return na - nb;
+    const ia = ORDEN_TALLAS.indexOf(String(a).toUpperCase());
+    const ib = ORDEN_TALLAS.indexOf(String(b).toUpperCase());
+    if (ia !== -1 && ib !== -1) return ia - ib;
+    if (ia !== -1) return -1;
+    if (ib !== -1) return 1;
+    return String(a).localeCompare(String(b));
+  });
+}
+
 /**
  * TiendaService — Catálogo PÚBLICO para la tienda online (Nuxt).
  * Solo expone productos con publicadoWeb = true y datos seguros
@@ -62,6 +78,19 @@ export class TiendaService {
       : [];
     const stockMap = new Map(stock.map((s) => [s.productoId, s._sum.stock ?? 0]));
 
+    // Tallas disponibles por producto (solo Principal, con stock)
+    const variantes = productoIds.length
+      ? await this.prisma.inventarioTerminado.findMany({
+          where: { productoId: { in: productoIds }, stock: { gt: 0 }, bodega: BODEGA_WEB },
+          select: { productoId: true, talla: true },
+        })
+      : [];
+    const tallasMap = new Map<number, Set<string>>();
+    for (const v of variantes) {
+      if (!tallasMap.has(v.productoId)) tallasMap.set(v.productoId, new Set());
+      tallasMap.get(v.productoId)!.add(v.talla);
+    }
+
     return productos.map((p) => {
       const galeria = (p as any).imagenes as { url: string }[];
       // Imagen principal y secundaria (para el efecto frente/espalda en hover)
@@ -77,6 +106,7 @@ export class TiendaService {
         imagenHover,
         precio: Number(p.precioWeb),
         disponible: (stockMap.get(p.id) ?? 0) > 0,
+        tallas: ordenarTallas([...(tallasMap.get(p.id) ?? [])]),
       };
     });
   }
@@ -86,6 +116,16 @@ export class TiendaService {
       where: { id: 1 },
       update: { logo: url },
       create: { id: 1, logo: url },
+    });
+  }
+
+  // Guarda una de las 2 imágenes de "Nuestra historia" (slot 1 o 2)
+  async guardarHistoriaImg(slot: number, url: string) {
+    const campo = slot === 2 ? 'historiaImg2' : 'historiaImg1';
+    return this.prisma.configTienda.upsert({
+      where: { id: 1 },
+      update: { [campo]: url },
+      create: { id: 1, [campo]: url },
     });
   }
 

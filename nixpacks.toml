@@ -9,6 +9,6 @@ cmds = ["npm install --production=false"]
 [phases.build]
 cmds = ["npm run build"]
 
-# Arranca en producción (liviano)
+# Aplica migraciones pendientes a la BD de producción y luego arranca
 [start]
-cmd = "npm run start:prod"
+cmd = "npx prisma migrate deploy && npm run start:prod"

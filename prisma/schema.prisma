@@ -182,6 +182,9 @@ model ConfigTienda {
   logo          String?  // URL del logo de la tienda
   razonSocial   String?  // razón social de la empresa
   ruc           String?  // RUC
+  // Imágenes de la sección "Nuestra historia" (2 fotos)
+  historiaImg1  String?
+  historiaImg2  String?
 }
 
 // Publicaciones tipo Instagram/reels para la tienda (foto o video propio).

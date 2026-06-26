@@ -127,6 +127,15 @@ export class WebAdminController {
     return { url };
   }
 
+  // Subir una de las 2 imágenes de "Nuestra historia" (slot = 1 o 2)
+  @Post('historia/:slot')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 25 * 1024 * 1024 } }))
+  async subirHistoria(@Param('slot') slot: string, @UploadedFile() file: Express.Multer.File) {
+    const url = await this.media.guardar(file, 'portada');
+    await this.tiendaService.guardarHistoriaImg(Number(slot), url);
+    return { url };
+  }
+
   // ===== PUBLICACIONES (tipo Instagram/reels) =====
   @Get('publicaciones')
   listarPublicaciones() {
