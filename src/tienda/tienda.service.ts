@@ -715,9 +715,10 @@ export class TiendaService {
     });
     if (!producto) throw new NotFoundException('Producto no disponible.');
 
-    // Variantes con stock disponible para la web (solo Almacén Principal)
+    // Variantes que EXISTEN en el Almacén Principal (incluye stock 0, para poder
+    // mostrar el color/talla "tachado" cuando existe pero no hay stock).
     const inventario = await this.prisma.inventarioTerminado.findMany({
-      where: { productoId: id, stock: { gt: 0 }, bodega: BODEGA_WEB },
+      where: { productoId: id, bodega: BODEGA_WEB },
       select: { color: true, talla: true, stock: true },
     });
 
@@ -776,6 +777,8 @@ export class TiendaService {
       valor: vc, // lo que se usa para seleccionar/pedir (coincide con las fotos)
       nombre: nombrePorVariante.get(vc) || vc, // nombre bonito para mostrar
       hex: hexPorVariante.get(vc) || null,
+      // ¿este color tiene stock en alguna talla? (si no, va tachado y no seleccionable)
+      disponible: variantes.some((v) => v.color === vc && v.stock > 0),
     }));
 
     return {
@@ -792,7 +795,7 @@ export class TiendaService {
       colores: nombresColores,
       coloresInfo,
       tallas: [...new Set(variantes.map((v) => v.talla))],
-      disponible: variantes.length > 0,
+      disponible: variantes.some((v) => v.stock > 0),
     };
   }
 }

@@ -81,6 +81,26 @@ export class ArchivosController {
     });
   }
 
+  // Colores que esta prenda tiene en almacén (para limitar el selector al subir foto)
+  @Get('producto/:id/colores')
+  @ApiOperation({ summary: 'Colores existentes en inventario de un producto' })
+  async coloresProducto(@Param('id') id: string) {
+    const rows = await this.prisma.inventarioTerminado.findMany({
+      where: { productoId: Number(id) },
+      select: { color: true },
+      distinct: ['color'],
+    });
+    const colores = await this.prisma.color.findMany({
+      select: { nombre: true, codigo: true, codigoHex: true },
+    });
+    const norm = (s: any) =>
+      String(s ?? '').trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    return rows.map((r) => {
+      const c = colores.find((x) => norm(x.codigo) === norm(r.color) || norm(x.nombre) === norm(r.color));
+      return { valor: r.color, nombre: c?.nombre || r.color, hex: c?.codigoHex || null };
+    });
+  }
+
   // Borrar una imagen de la galería (también borra el archivo físico)
   @Delete('imagen/:imagenId')
   @ApiOperation({ summary: 'Eliminar una imagen de la galería' })
