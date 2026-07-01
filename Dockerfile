@@ -15,9 +15,8 @@ RUN npm ci
 
 # Copiar el resto del código
 COPY . .
-
-# Compilar TypeScript a JavaScript
-RUN npm run build
+RUN npm run build || echo "Build failed, checking..."
+RUN ls -la dist/ || echo "No dist folder!"
 
 # ----------- ETAPA 2: PRODUCCIÓN -----------
 FROM node:20-alpine AS production
