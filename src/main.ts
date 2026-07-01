@@ -3,6 +3,11 @@ import { AppModule } from './app.module';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 
 async function bootstrap() {
+  // 🔍 Diagnóstico de entorno (para ver si Dokploy inyecta las variables)
+  console.log('[BOOT] DATABASE_URL definido:', !!process.env.DATABASE_URL);
+  console.log('[BOOT] PORT:', process.env.PORT || '(sin definir → usa 3000)');
+  console.log('[BOOT] STORAGE_DRIVER:', process.env.STORAGE_DRIVER || '(sin definir)');
+
   const app = await NestFactory.create(AppModule);
 
   // =========================================================
