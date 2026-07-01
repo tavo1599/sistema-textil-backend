@@ -15,6 +15,12 @@ export class AppController {
     return this.appService.getHello();
   }
 
+  // Healthcheck para Docker/Dokploy (Traefik enruta solo si el contenedor está "healthy")
+  @Get('health')
+  health() {
+    return { status: 'ok' };
+  }
+
   // 👇 NUESTRA RUTA MÁGICA PARA CREAR EL ADMIN 👇
   @Get('crear-admin')
   async crearAdmin() {
