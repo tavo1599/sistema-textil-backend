@@ -1,4 +1,3 @@
-
 # ============================================
 # Multi-stage build para NestJS + Prisma
 # ============================================
@@ -15,7 +14,9 @@ RUN npm ci
 
 # Copiar el resto del código
 COPY . .
-RUN npm run build || echo "Build failed, checking..."
+
+# ✅ CAMBIO: Usar npx tsc directamente
+RUN npx tsc -p tsconfig.build.json
 RUN ls -la dist/ || echo "No dist folder!"
 
 # ----------- ETAPA 2: PRODUCCIÓN -----------
@@ -48,4 +49,4 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
 
-CMD ["node", "dist/main"]
+CMD ["node", "dist/src/main"]
