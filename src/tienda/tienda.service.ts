@@ -747,39 +747,41 @@ export class TiendaService {
       select: { nombre: true, codigo: true, codigoHex: true },
     });
 
-    const varianteColores = [...new Set(variantes.map((v) => v.color))];
-    const indiceAVariante = new Map<string, string>(); // normalizado (código o nombre) -> color de variante
-    const hexPorVariante = new Map<string, string | null>();
-    const nombrePorVariante = new Map<string, string>();
-    for (const vc of varianteColores) {
-      const c = todosColores.find((x) => norm(x.codigo) === norm(vc) || norm(x.nombre) === norm(vc));
-      indiceAVariante.set(norm(vc), vc);
-      if (c) {
-        indiceAVariante.set(norm(c.codigo), vc);
-        indiceAVariante.set(norm(c.nombre), vc);
-        hexPorVariante.set(vc, c.codigoHex || null);
-        nombrePorVariante.set(vc, c.nombre);
-      } else {
-        nombrePorVariante.set(vc, vc);
-      }
-    }
+    // 🎨 Los colores que se MUESTRAN en la web = SOLO los que tienen foto en la galería.
+    // Así el admin controla qué colores aparecen: sube foto → aparece; sin foto → no sale.
+    const invColores = [...new Set(variantes.map((v) => v.color))]; // colores en inventario (Principal)
 
-    // Re-llaveamos las fotos al color de variante (traduce nombre <-> código)
+    // Resuelve un color de foto a su representación de inventario (para stock/pedido) + nombre/hex
+    const resolverColor = (token: string) => {
+      const c = todosColores.find((x) => norm(x.codigo) === norm(token) || norm(x.nombre) === norm(token));
+      const inv = invColores.find(
+        (ic) => norm(ic) === norm(token) || (!!c && (norm(ic) === norm(c.codigo) || norm(ic) === norm(c.nombre))),
+      );
+      return {
+        valor: inv ?? token, // coincide con inventario si existe (para validar/descontar stock al comprar)
+        nombre: c?.nombre ?? token,
+        hex: c?.codigoHex ?? null,
+      };
+    };
+
+    const mapaColor = new Map<string, { valor: string; nombre: string; hex: string | null; disponible: boolean }>();
     const imagenesPorColor: Record<string, string[]> = {};
     for (const g of galeria) {
       if (!g.color) continue;
-      const clave = indiceAVariante.get(norm(g.color)) ?? g.color;
-      (imagenesPorColor[clave] ??= []).push(g.url);
+      const r = resolverColor(g.color);
+      (imagenesPorColor[r.valor] ??= []).push(g.url);
+      if (!mapaColor.has(r.valor)) {
+        mapaColor.set(r.valor, {
+          valor: r.valor,
+          nombre: r.nombre,
+          hex: r.hex,
+          // ¿tiene stock en alguna talla? (si no, va tachado y no seleccionable)
+          disponible: variantes.some((v) => v.color === r.valor && v.stock > 0),
+        });
+      }
     }
-
-    const nombresColores = varianteColores;
-    const coloresInfo = varianteColores.map((vc) => ({
-      valor: vc, // lo que se usa para seleccionar/pedir (coincide con las fotos)
-      nombre: nombrePorVariante.get(vc) || vc, // nombre bonito para mostrar
-      hex: hexPorVariante.get(vc) || null,
-      // ¿este color tiene stock en alguna talla? (si no, va tachado y no seleccionable)
-      disponible: variantes.some((v) => v.color === vc && v.stock > 0),
-    }));
+    const coloresInfo = [...mapaColor.values()];
+    const nombresColores = coloresInfo.map((c) => c.valor);
 
     return {
       id: producto.id,
