@@ -96,10 +96,17 @@ export class CobranzasService {
         dineroDisponible -= montoUsadoEnEstaVenta;
       }
 
-      // 5. Finalmente, actualizamos la billetera principal del cliente
+      // Cuánto se pudo aplicar realmente a ventas (lo que quedó sin usar NO se descuenta)
+      const totalAplicado = Number(data.monto) - dineroDisponible;
+      if (totalAplicado <= 0) {
+        // No había ninguna venta pendiente donde registrar el abono → no descontamos a ciegas
+        throw new BadRequestException('No hay deudas pendientes registradas para aplicar este pago. Revisa las ventas del cliente.');
+      }
+
+      // 5. Finalmente, actualizamos la billetera principal del cliente (solo lo aplicado)
       const clienteActualizado = await tx.cliente.update({
         where: { id: data.clienteId },
-        data: { saldoPendiente: { decrement: Number(data.monto) } }
+        data: { saldoPendiente: { decrement: totalAplicado } }
       });
 
       return {
@@ -146,9 +153,10 @@ async crearDeudaManual(data: { clienteId: number; monto: number; concepto: strin
           totalVenta: data.monto,
           totalPagado: 0,
           condicionPago: 'CREDITO',
-          
-          // 🔥 LOS 3 CAMPOS OBLIGATORIOS QUE FALTABAN:
-          tipoVenta: 'MAYORISTA', 
+          estadoPago: 'PENDIENTE', // 🔥 clave: sin esto quedaba "PAGADO" (default) y el abono no se registraba
+
+          // Campos obligatorios
+          tipoVenta: 'MAYORISTA',
           metodoEntrega: 'ENTREGA_INMEDIATA',
           bodegaId: 1, // Asignamos la deuda a la bodega principal
         },
