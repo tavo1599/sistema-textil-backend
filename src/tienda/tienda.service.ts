@@ -78,18 +78,32 @@ export class TiendaService {
       : [];
     const stockMap = new Map(stock.map((s) => [s.productoId, s._sum.stock ?? 0]));
 
-    // Tallas disponibles por producto (solo Principal, con stock)
+    // Tallas y colores disponibles por producto (solo Principal, con stock)
     const variantes = productoIds.length
       ? await this.prisma.inventarioTerminado.findMany({
           where: { productoId: { in: productoIds }, stock: { gt: 0 }, bodega: BODEGA_WEB },
-          select: { productoId: true, talla: true },
+          select: { productoId: true, talla: true, color: true },
         })
       : [];
     const tallasMap = new Map<number, Set<string>>();
+    const coloresMap = new Map<number, Set<string>>();
     for (const v of variantes) {
       if (!tallasMap.has(v.productoId)) tallasMap.set(v.productoId, new Set());
       tallasMap.get(v.productoId)!.add(v.talla);
+      if (!coloresMap.has(v.productoId)) coloresMap.set(v.productoId, new Set());
+      coloresMap.get(v.productoId)!.add(v.color);
     }
+
+    // Resolvemos nombre y hex de cada color (para los puntitos del catálogo)
+    const norm = (s: any) =>
+      String(s ?? '').trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    const todosColores = await this.prisma.color.findMany({
+      select: { nombre: true, codigo: true, codigoHex: true },
+    });
+    const infoColor = (token: string) => {
+      const c = todosColores.find((x) => norm(x.codigo) === norm(token) || norm(x.nombre) === norm(token));
+      return { nombre: c?.nombre ?? token, hex: c?.codigoHex ?? null };
+    };
 
     return productos.map((p) => {
       const galeria = (p as any).imagenes as { url: string }[];
@@ -107,6 +121,7 @@ export class TiendaService {
         precio: Number(p.precioWeb),
         disponible: (stockMap.get(p.id) ?? 0) > 0,
         tallas: ordenarTallas([...(tallasMap.get(p.id) ?? [])]),
+        colores: [...(coloresMap.get(p.id) ?? [])].map(infoColor),
       };
     });
   }

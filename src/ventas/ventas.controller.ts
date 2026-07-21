@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Get, Param, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param, Query, UseGuards } from '@nestjs/common';
 import { VentasService } from './ventas.service';
 import { CreateVentaDto } from './dto/create-venta.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -32,5 +32,24 @@ export class VentasController {
   @Get('escanear/:codigo')
   escanearCodigo(@Param('codigo') codigo: string) {
     return this.ventasService.buscarPorCodigoEscaner(codigo);
+  }
+
+  // --- CIERRE DE CAJA ---
+  @Get('cierre-caja')
+  cierreCaja(@Query('fecha') fecha?: string, @Query('bodegaId') bodegaId?: string) {
+    return this.ventasService.cierreDeCaja(fecha, bodegaId ? Number(bodegaId) : undefined);
+  }
+
+  // --- DEVOLUCIONES / CAMBIOS ---
+  @Get('buscar/:correlativo')
+  buscarVenta(@Param('correlativo') correlativo: string) {
+    return this.ventasService.buscarVentaPorCorrelativo(correlativo);
+  }
+
+  @Post('devolucion')
+  registrarDevolucion(
+    @Body() body: { ventaId: number; bodegaId: number; motivo?: string; items: { detalleId: number; cantidad: number }[] },
+  ) {
+    return this.ventasService.registrarDevolucion(body);
   }
 }
