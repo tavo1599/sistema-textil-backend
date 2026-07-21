@@ -57,11 +57,8 @@ export class VentasService {
 
         const nuevoSaldo = Number(cliente.saldoPendiente) + saldoRestante;
 
-        if (nuevoSaldo > Number(cliente.limiteCredito)) {
-          throw new BadRequestException(
-            `Excede límite de crédito. Límite: S/ ${cliente.limiteCredito}, Deuda proyectada: S/ ${nuevoSaldo}`
-          );
-        }
+        // Crédito ILIMITADO: ya no se bloquea la venta por límite de crédito.
+        // (Antes, si el cliente tenía deuda previa, la venta se rechazaba.)
 
         await tx.cliente.update({
           where: { id: Number(dto.clienteId) },
