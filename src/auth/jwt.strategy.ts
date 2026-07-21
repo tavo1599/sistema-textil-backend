@@ -8,7 +8,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: 'MODITEX_SECRET_KEY_2026', // DEBE ser la misma frase que pusimos en auth.module
+      // DEBE ser el mismo secreto que en auth.module
+      secretOrKey: process.env.JWT_SECRET || 'MODITEX_SECRET_KEY_2026',
     });
   }
 
