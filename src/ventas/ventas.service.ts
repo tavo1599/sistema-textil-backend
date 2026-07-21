@@ -91,6 +91,7 @@ export class VentasService {
           totalPagado: montoAdelanto,
           
           bodegaId: Number(dto.almacenId),
+          usuarioId: (dto as any).usuarioId ? Number((dto as any).usuarioId) : null, // quién vendió
           estado: dto.requiereEnvio || metodoEntregaFinal === 'ENVIO_AGENCIA' ? 'Pendiente Despacho' : 'Completada',
           
           detalles: {
@@ -216,11 +217,20 @@ export class VentasService {
   // ========================================================
   // 🟢 NUEVA FUNCIÓN PARA EL DASHBOARD DE VUE
   // ========================================================
-  async obtenerReporteGeneral() {
-    // Traemos las últimas ventas mapeando la relación con "bodega"
+  async obtenerReporteGeneral(fecha?: string) {
+    // Si mandan una fecha (YYYY-MM-DD) filtramos ese día; si no, las últimas 50
+    let filtroFecha: any = {};
+    if (fecha) {
+      const desde = new Date(`${fecha}T00:00:00`);
+      const hasta = new Date(`${fecha}T00:00:00`);
+      hasta.setHours(23, 59, 59, 999);
+      filtroFecha = { fecha: { gte: desde, lte: hasta } };
+    }
+
     const ventasBD = await this.prisma.venta.findMany({
+      where: filtroFecha,
       orderBy: { fecha: 'desc' },
-      take: 50,
+      ...(fecha ? {} : { take: 50 }),
       include: {
         bodega: true, // Asumimos que la relación en Prisma se llama 'bodega' por el campo 'bodegaId'
         detalles: true
@@ -526,6 +536,114 @@ export class VentasService {
     };
   }
 
+  // ========================================================
+  // DETALLE COMPLETO DE UNA VENTA (para el modal del reporte)
+  // ========================================================
+  async obtenerDetalleVenta(id: number) {
+    const venta = await this.prisma.venta.findUnique({
+      where: { id: Number(id) },
+      include: {
+        bodega: { select: { nombre: true, tipo: true, direccion: true } },
+        cliente: { select: { nombre: true, documento: true, telefono: true } },
+        usuario: { select: { nombre: true, email: true } },
+        detalles: { include: { producto: { select: { nombre: true, skuBase: true } } } },
+        abonos: { orderBy: { fecha: 'desc' } },
+        despacho: true,
+      },
+    });
+    if (!venta) throw new BadRequestException('Venta no encontrada.');
+
+    const prendas = venta.detalles.reduce((s, d) => s + d.cantidad, 0);
+
+    // Traducimos el código de color a su NOMBRE (los vendedores no manejan códigos)
+    const normC = (s: any) =>
+      String(s ?? '').trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    const coloresBD = await this.prisma.color.findMany({ select: { nombre: true, codigo: true } });
+    const nombreDeColor = (token: string) => {
+      const c = coloresBD.find((x) => normC(x.codigo) === normC(token) || normC(x.nombre) === normC(token));
+      return c?.nombre ?? token;
+    };
+
+    // Si fue al crédito, adjuntamos la situación del cliente y cómo ha ido creciendo su deuda
+    let credito: any = null;
+    if (venta.clienteId && venta.condicionPago !== 'CONTADO') {
+      const cli = await this.prisma.cliente.findUnique({
+        where: { id: venta.clienteId },
+        select: { id: true, nombre: true, documento: true, telefono: true, saldoPendiente: true },
+      });
+
+      const ventasCredito = await this.prisma.venta.findMany({
+        where: { clienteId: venta.clienteId, condicionPago: { not: 'CONTADO' } },
+        orderBy: { fecha: 'desc' },
+        take: 10,
+        select: { id: true, correlativo: true, fecha: true, totalVenta: true, totalPagado: true, estadoPago: true },
+      });
+
+      credito = {
+        clienteId: cli?.id,
+        nombre: cli?.nombre,
+        documento: cli?.documento,
+        telefono: cli?.telefono,
+        // Deuda total que arrastra el cliente hoy (todas sus ventas)
+        deudaTotalActual: Number(cli?.saldoPendiente ?? 0),
+        // Cuánto sumó ESTA venta a su deuda
+        aportoAEstaDeuda: Number(venta.totalVenta) - Number(venta.totalPagado),
+        historial: ventasCredito.map((v) => ({
+          id: v.id,
+          correlativo: v.correlativo,
+          fecha: v.fecha,
+          total: Number(v.totalVenta),
+          pagado: Number(v.totalPagado),
+          saldo: Number(v.totalVenta) - Number(v.totalPagado),
+          estadoPago: v.estadoPago,
+          esEsta: v.id === venta.id,
+        })),
+      };
+    }
+
+    return {
+      id: venta.id,
+      correlativo: venta.correlativo,
+      fecha: venta.fecha,
+      cliente: venta.cliente?.nombre || venta.clienteNombre || 'Público General',
+      clienteDoc: venta.cliente?.documento || null,
+      clienteTel: venta.cliente?.telefono || null,
+      vendedor: (venta as any).usuario?.nombre || null, // se llena cuando la venta guarda el usuario
+      almacen: venta.bodega?.nombre || '—',
+      almacenTipo: venta.bodega?.tipo || null,
+      tipoVenta: venta.tipoVenta,
+      condicionPago: venta.condicionPago,
+      estadoPago: venta.estadoPago,
+      metodoEntrega: venta.metodoEntrega,
+      destinoEnvio: venta.destinoEnvio,
+      estado: venta.estado,
+      prendas,
+      totalVenta: Number(venta.totalVenta),
+      totalPagado: Number(venta.totalPagado),
+      saldo: Number(venta.totalVenta) - Number(venta.totalPagado),
+      detalles: venta.detalles.map((d) => ({
+        id: d.id,
+        producto: d.producto?.nombre,
+        sku: d.producto?.skuBase,
+        color: nombreDeColor(d.color), // nombre legible, ej. "NEGRO" en vez de "NGR"
+        colorCodigo: d.color,          // el código queda por si se necesita
+        talla: d.talla,
+        cantidad: d.cantidad,
+        precioUnitario: Number(d.precioUnitario),
+        subtotal: Number(d.subtotal),
+      })),
+      abonos: venta.abonos.map((a) => ({
+        id: a.id,
+        fecha: a.fecha,
+        monto: Number(a.monto),
+        metodoPago: a.metodoPago,
+        anotacion: a.anotacion,
+      })),
+      despacho: venta.despacho || null,
+      credito, // null si fue al contado
+    };
+  }
+
   // Busca una venta por su correlativo (para la pantalla de devoluciones)
   async buscarVentaPorCorrelativo(correlativo: string) {
     const venta = await this.prisma.venta.findFirst({
@@ -533,7 +651,19 @@ export class VentasService {
       include: { detalles: { include: { producto: { select: { nombre: true } } } }, cliente: true },
     });
     if (!venta) throw new BadRequestException('No se encontró una venta con ese código.');
-    return venta;
+
+    // Mostramos el nombre del color, no el código
+    const normC = (s: any) =>
+      String(s ?? '').trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    const coloresBD = await this.prisma.color.findMany({ select: { nombre: true, codigo: true } });
+
+    return {
+      ...venta,
+      detalles: venta.detalles.map((d) => {
+        const c = coloresBD.find((x) => normC(x.codigo) === normC(d.color) || normC(x.nombre) === normC(d.color));
+        return { ...d, color: c?.nombre ?? d.color, colorCodigo: d.color };
+      }),
+    };
   }
 
   private async generarCorrelativo(tx: any): Promise<string> {

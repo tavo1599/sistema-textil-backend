@@ -415,6 +415,7 @@ model Usuario {
   nombre   String
   rol      String  @default("USER") // "ADMIN" o "USER"
   logs     Auditoria[]
+  ventas   Venta[] // ventas registradas por este usuario
 }
 
 model Auditoria {
@@ -498,6 +499,10 @@ model Venta {
   cliente         Cliente? @relation(fields: [clienteId], references: [id])
 
   clienteNombre   String         @default("Público General")
+
+  // Quién registró la venta (para el reporte: "quién lo vendió")
+  usuarioId       Int?
+  usuario         Usuario? @relation(fields: [usuarioId], references: [id])
 
   tipoVenta       String   // 'MINORISTA', 'MAYORISTA'
   

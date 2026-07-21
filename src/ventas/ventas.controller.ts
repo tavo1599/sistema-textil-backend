@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Get, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param, Query, Req, UseGuards } from '@nestjs/common';
 import { VentasService } from './ventas.service';
 import { CreateVentaDto } from './dto/create-venta.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -12,8 +12,9 @@ export class VentasController {
   // 1. ENDPOINT DE VENTAS (El que consume la Laptop/Caja)
   // ========================================================
   @Post()
-  create(@Body() createVentaDto: CreateVentaDto) {
-    return this.ventasService.registrarVenta(createVentaDto);
+  create(@Body() createVentaDto: CreateVentaDto, @Req() req: any) {
+    // Guardamos quién registró la venta (sale del token)
+    return this.ventasService.registrarVenta({ ...createVentaDto, usuarioId: req.user?.id });
   }
 
   // ========================================================
@@ -25,13 +26,19 @@ export class VentasController {
   }
 
  @Get('reporte-general')
-  obtenerReporteGeneral() {
-    return this.ventasService.obtenerReporteGeneral();
+  obtenerReporteGeneral(@Query('fecha') fecha?: string) {
+    return this.ventasService.obtenerReporteGeneral(fecha);
   }
 
   @Get('escanear/:codigo')
   escanearCodigo(@Param('codigo') codigo: string) {
     return this.ventasService.buscarPorCodigoEscaner(codigo);
+  }
+
+  // Detalle completo de una venta (modal del reporte)
+  @Get('detalle/:id')
+  obtenerDetalleVenta(@Param('id') id: string) {
+    return this.ventasService.obtenerDetalleVenta(Number(id));
   }
 
   // --- CIERRE DE CAJA ---
