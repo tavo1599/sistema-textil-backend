@@ -131,10 +131,22 @@ export class CobranzasService {
   }
 
 async crearDeudaManual(data: { clienteId: number; monto: number; concepto: string }) {
-    const correlativoManual = `MAN-${Date.now().toString().slice(-6)}`;
-
     return this.prisma.$transaction(async (tx) => {
-      
+      // ⚠️ Antes se usaba Date.now() cortado a 6 dígitos, que se repite cada ~16 min
+      // y podía chocar. Ahora es un correlativo secuencial real (MAN-000001, ...).
+      const ultimaManual = await tx.venta.findFirst({
+        where: { correlativo: { startsWith: 'MAN-' } },
+        orderBy: { correlativo: 'desc' },
+        select: { correlativo: true },
+      });
+      let numeroManual = 1;
+      if (ultimaManual?.correlativo) {
+        const m = ultimaManual.correlativo.match(/(\d+)$/);
+        if (m) numeroManual = parseInt(m[1], 10) + 1;
+      }
+      const correlativoManual = `MAN-${String(numeroManual).padStart(6, '0')}`;
+
+
       // 1. Incrementamos el saldoPendiente del cliente afectado
       await tx.cliente.update({
         where: { id: data.clienteId },

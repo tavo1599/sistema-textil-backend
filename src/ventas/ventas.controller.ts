@@ -53,6 +53,11 @@ export class VentasController {
     return this.ventasService.buscarVentaPorCorrelativo(correlativo);
   }
 
+  @Post('cambio')
+  registrarCambio(@Body() body: any) {
+    return this.ventasService.registrarCambio(body);
+  }
+
   @Post('devolucion')
   registrarDevolucion(
     @Body() body: { ventaId: number; bodegaId: number; motivo?: string; items: { detalleId: number; cantidad: number }[] },

@@ -10,7 +10,26 @@ export class VentasService {
     private kardex: KardexService,
   ) {}
 
-  async registrarVenta(dto: any) { 
+  // Si dos cajas venden en el mismo instante, ambas pueden calcular el mismo
+  // correlativo. La BD lo rechaza (es único) y aquí reintentamos con el siguiente
+  // número, para que la venta NO se pierda ni se dupliquen códigos.
+  async registrarVenta(dto: any) {
+    const MAX_INTENTOS = 4;
+    for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+      try {
+        return await this.ejecutarVenta(dto);
+      } catch (e: any) {
+        const chocoElCorrelativo =
+          e?.code === 'P2002' && String(e?.meta?.target ?? '').includes('correlativo');
+        if (chocoElCorrelativo && intento < MAX_INTENTOS) continue; // reintenta
+        throw e;
+      }
+    }
+    // Nunca debería llegar aquí (el bucle retorna o lanza), pero deja el tipo claro
+    throw new BadRequestException('No se pudo generar el código de la venta. Intenta nuevamente.');
+  }
+
+  private async ejecutarVenta(dto: any) {
     // 🔥 TRANSACCIÓN ATÓMICA: Todo se guarda junto o nada se guarda
     return this.prisma.$transaction(async (tx) => {
       let totalVenta = 0;
@@ -644,6 +663,234 @@ export class VentasService {
     };
   }
 
+  // ========================================================
+  // CAMBIO DE PRENDA (otra talla / otro color)
+  // El cliente entrega prendas y se lleva otras: se ajusta la MISMA venta,
+  // el stock se mueve en ambos sentidos y se cobra/devuelve la diferencia.
+  // ========================================================
+  async registrarCambio(data: {
+    ventaId: number;
+    bodegaId: number;
+    motivo?: string;
+    entrega: { detalleId: number; cantidad: number }[];
+    recibe: { productoId: number; color: string; talla: string; cantidad: number; precioUnitario?: number }[];
+    pagaDiferencia?: boolean; // true = se cobra/devuelve al momento · false = va a la deuda
+  }) {
+    if (!data.entrega?.length) throw new BadRequestException('Indica qué prenda entrega el cliente.');
+    if (!data.recibe?.length) throw new BadRequestException('Indica qué prenda se lleva el cliente.');
+
+    return this.prisma.$transaction(async (tx) => {
+      const venta = await tx.venta.findUnique({
+        where: { id: Number(data.ventaId) },
+        include: { detalles: true },
+      });
+      if (!venta) throw new BadRequestException('Venta no encontrada.');
+
+      const bodegaId = Number(data.bodegaId);
+      const entregadas: any[] = [];
+      const recibidas: any[] = [];
+      let montoDevuelto = 0;
+      let montoNuevo = 0;
+
+      // ---------- 1. LO QUE DEVUELVE (entra al almacén) ----------
+      for (const it of data.entrega) {
+        const cant = Number(it.cantidad);
+        if (cant <= 0) continue;
+
+        const detalle = venta.detalles.find((d) => d.id === Number(it.detalleId));
+        if (!detalle) throw new BadRequestException('Una prenda no pertenece a esta venta.');
+        if (cant > detalle.cantidad) {
+          throw new BadRequestException(`No puedes cambiar ${cant}; solo se vendieron ${detalle.cantidad}.`);
+        }
+
+        montoDevuelto += cant * Number(detalle.precioUnitario);
+
+        const existente = await tx.inventarioTerminado.findFirst({
+          where: { productoId: detalle.productoId, bodegaId, color: detalle.color, talla: detalle.talla },
+        });
+        if (existente) {
+          await tx.inventarioTerminado.update({
+            where: { id: existente.id },
+            data: { stock: existente.stock + cant },
+          });
+        } else {
+          await tx.inventarioTerminado.create({
+            data: { productoId: detalle.productoId, bodegaId, color: detalle.color, talla: detalle.talla, stock: cant },
+          });
+        }
+
+        await tx.movimientoInventario.create({
+          data: {
+            tipoMovimiento: 'INGRESO',
+            motivo: data.motivo || `Cambio (entrega) venta ${venta.correlativo}`,
+            cantidad: cant,
+            productoId: detalle.productoId,
+            color: detalle.color,
+            talla: detalle.talla,
+            bodegaId,
+          },
+        });
+
+        const restante = detalle.cantidad - cant;
+        if (restante <= 0) {
+          await tx.ventaDetalle.delete({ where: { id: detalle.id } });
+        } else {
+          await tx.ventaDetalle.update({
+            where: { id: detalle.id },
+            data: { cantidad: restante, subtotal: restante * Number(detalle.precioUnitario) },
+          });
+        }
+
+        entregadas.push({
+          producto: detalle.productoId,
+          color: detalle.color,
+          talla: detalle.talla,
+          cantidad: cant,
+          precioUnitario: Number(detalle.precioUnitario),
+          subtotal: cant * Number(detalle.precioUnitario),
+        });
+      }
+
+      // ---------- 2. LO QUE SE LLEVA (sale del almacén) ----------
+      for (const it of data.recibe) {
+        const cant = Number(it.cantidad);
+        if (cant <= 0) continue;
+
+        const stockItem = await tx.inventarioTerminado.findFirst({
+          where: { productoId: Number(it.productoId), bodegaId, color: it.color, talla: it.talla },
+        });
+        if (!stockItem || stockItem.stock < cant) {
+          throw new BadRequestException(
+            `No hay stock suficiente de la prenda que se lleva (${it.color} / ${it.talla}).`,
+          );
+        }
+
+        await tx.inventarioTerminado.update({
+          where: { id: stockItem.id },
+          data: { stock: stockItem.stock - cant },
+        });
+
+        await tx.movimientoInventario.create({
+          data: {
+            tipoMovimiento: 'SALIDA',
+            motivo: data.motivo || `Cambio (entrega al cliente) venta ${venta.correlativo}`,
+            cantidad: cant,
+            productoId: Number(it.productoId),
+            color: it.color,
+            talla: it.talla,
+            bodegaId,
+          },
+        });
+
+        // Precio: el que manden desde la pantalla; si no, el precio web como referencia
+        let precio = Number(it.precioUnitario);
+        if (!precio || Number.isNaN(precio)) {
+          const prod = await tx.producto.findUnique({
+            where: { id: Number(it.productoId) },
+            select: { precioWeb: true },
+          });
+          precio = Number(prod?.precioWeb ?? 0);
+        }
+
+        montoNuevo += cant * precio;
+
+        await tx.ventaDetalle.create({
+          data: {
+            ventaId: venta.id,
+            productoId: Number(it.productoId),
+            color: it.color,
+            talla: it.talla,
+            cantidad: cant,
+            precioUnitario: precio,
+            subtotal: cant * precio,
+          },
+        });
+
+        recibidas.push({
+          producto: Number(it.productoId),
+          color: it.color,
+          talla: it.talla,
+          cantidad: cant,
+          precioUnitario: precio,
+          subtotal: cant * precio,
+        });
+      }
+
+      // ---------- 3. AJUSTE DE LA VENTA ----------
+      const diferencia = montoNuevo - montoDevuelto; // + el cliente paga, - se le devuelve
+      const totalVentaAnt = Number(venta.totalVenta);
+      const totalPagadoAnt = Number(venta.totalPagado);
+      const nuevoTotalVenta = Math.max(totalVentaAnt - montoDevuelto + montoNuevo, 0);
+
+      const pagaAhora = data.pagaDiferencia !== false; // por defecto se cobra/devuelve al momento
+      let nuevoTotalPagado = totalPagadoAnt;
+      if (pagaAhora) nuevoTotalPagado = totalPagadoAnt + diferencia;
+      // Nunca puede quedar pagado de más ni negativo
+      nuevoTotalPagado = Math.max(Math.min(nuevoTotalPagado, nuevoTotalVenta), 0);
+
+      const efectivoACobrar = Math.max(nuevoTotalPagado - totalPagadoAnt, 0);
+      const efectivoADevolver = Math.max(totalPagadoAnt - nuevoTotalPagado, 0);
+
+      const deudaAntes = totalVentaAnt - totalPagadoAnt;
+      const deudaDespues = nuevoTotalVenta - nuevoTotalPagado;
+      const cambioDeuda = deudaDespues - deudaAntes; // + sube la deuda, - baja
+
+      const estadoPago =
+        nuevoTotalPagado >= nuevoTotalVenta ? 'PAGADO' : nuevoTotalPagado > 0 ? 'PAGO_PARCIAL' : 'PENDIENTE';
+
+      await tx.venta.update({
+        where: { id: venta.id },
+        data: { totalVenta: nuevoTotalVenta, totalPagado: nuevoTotalPagado, estadoPago },
+      });
+
+      if (venta.clienteId && cambioDeuda !== 0) {
+        await tx.cliente.update({
+          where: { id: venta.clienteId },
+          data: { saldoPendiente: { increment: cambioDeuda } },
+        });
+      }
+
+      // ---------- 4. DATOS PARA EL TICKET ----------
+      const nombresProd = await tx.producto.findMany({
+        where: { id: { in: [...entregadas, ...recibidas].map((x) => x.producto) } },
+        select: { id: true, nombre: true },
+      });
+      const nombreProd = (id: number) => nombresProd.find((p) => p.id === id)?.nombre ?? `#${id}`;
+
+      const normC = (s: any) =>
+        String(s ?? '').trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+      const coloresBD = await tx.color.findMany({ select: { nombre: true, codigo: true } });
+      const nombreCol = (t: string) =>
+        coloresBD.find((c) => normC(c.codigo) === normC(t) || normC(c.nombre) === normC(t))?.nombre ?? t;
+
+      const mapear = (x: any) => ({
+        producto: nombreProd(x.producto),
+        color: nombreCol(x.color),
+        talla: x.talla,
+        cantidad: x.cantidad,
+        precioUnitario: x.precioUnitario,
+        subtotal: x.subtotal,
+      });
+
+      return {
+        mensaje: 'Cambio registrado ✅',
+        correlativo: venta.correlativo,
+        fecha: new Date(),
+        entregadas: entregadas.map(mapear),
+        recibidas: recibidas.map(mapear),
+        montoDevuelto: Number(montoDevuelto.toFixed(2)),
+        montoNuevo: Number(montoNuevo.toFixed(2)),
+        diferencia: Number(diferencia.toFixed(2)),
+        efectivoACobrar: Number(efectivoACobrar.toFixed(2)),
+        efectivoADevolver: Number(efectivoADevolver.toFixed(2)),
+        cambioDeuda: Number(cambioDeuda.toFixed(2)),
+        nuevoTotalVenta: Number(nuevoTotalVenta.toFixed(2)),
+        nuevoTotalPagado: Number(nuevoTotalPagado.toFixed(2)),
+        nuevoSaldo: Number(deudaDespues.toFixed(2)),
+      };
+    });
+  }
+
   // Busca una venta por su correlativo (para la pantalla de devoluciones)
   async buscarVentaPorCorrelativo(correlativo: string) {
     const venta = await this.prisma.venta.findFirst({
@@ -667,8 +914,13 @@ export class VentasService {
   }
 
   private async generarCorrelativo(tx: any): Promise<string> {
+    // ⚠️ Solo miramos correlativos que empiezan con "VEN-". Antes tomaba la última
+    // venta sin filtrar y, si era una deuda manual (MAN-482716), el número saltaba
+    // a VEN-482717. Ordenamos por correlativo (el relleno con ceros hace que el
+    // orden alfabético coincida con el numérico).
     const ultima = await tx.venta.findFirst({
-      orderBy: { id: 'desc' },
+      where: { correlativo: { startsWith: 'VEN-' } },
+      orderBy: { correlativo: 'desc' },
       select: { correlativo: true },
     });
 
