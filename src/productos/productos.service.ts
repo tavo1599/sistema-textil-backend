@@ -20,6 +20,9 @@ export class ProductosService {
         descripcionWeb: data.descripcionWeb ?? null,
         imagenUrl: data.imagenUrl ?? null,
         precioWeb: data.precioWeb != null ? Number(data.precioWeb) : 0,
+        // Listas de precio de la tienda física
+        precioMinorista: data.precioMinorista != null ? Number(data.precioMinorista) : 0,
+        precioMayorista: data.precioMayorista != null ? Number(data.precioMayorista) : 0,
       }
     });
   }
@@ -70,6 +73,9 @@ export class ProductosService {
         ...(data.descripcionWeb !== undefined ? { descripcionWeb: data.descripcionWeb } : {}),
         ...(data.imagenUrl !== undefined ? { imagenUrl: data.imagenUrl } : {}),
         ...(data.precioWeb !== undefined ? { precioWeb: Number(data.precioWeb) } : {}),
+        // Listas de precio de la tienda física (solo se tocan si vienen en el payload)
+        ...(data.precioMinorista !== undefined ? { precioMinorista: Number(data.precioMinorista) } : {}),
+        ...(data.precioMayorista !== undefined ? { precioMayorista: Number(data.precioMayorista) } : {}),
       },
     });
   }

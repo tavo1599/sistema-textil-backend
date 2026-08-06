@@ -37,7 +37,13 @@ model Producto {
   categoria   String?
 
   imagenLocal    String?
-  
+
+  // LISTA DE PRECIOS DE TIENDA FÍSICA
+  // La caja elige una de las dos listas y el precio entra solo al carrito.
+  // Sigue siendo editable por línea al momento de vender.
+  precioMinorista Decimal @default(0.00) @db.Decimal(10, 2) // Venta al público
+  precioMayorista Decimal @default(0.00) @db.Decimal(10, 2) // Venta por volumen
+
   // PREPARACIÓN PARA E-COMMERCE (Página Web)
   publicadoWeb Boolean @default(false)
   descripcionWeb String?
