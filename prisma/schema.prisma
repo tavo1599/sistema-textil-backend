@@ -708,6 +708,7 @@ model CompraDetalle {
   productoId    Int?
   producto      Producto? @relation(fields: [productoId], references: [id])
   color         String?
+  
   talla         String?
   
   // 🔥 AQUÍ GUARDAMOS EL QR/CÓDIGO DE BARRAS DEL PROVEEDOR
