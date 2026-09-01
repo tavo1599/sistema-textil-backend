@@ -16,10 +16,16 @@ export class CobranzasService {
       orderBy: { 
         saldoPendiente: 'desc' // Los que deben más dinero salen primero
       },
-      // Traemos el detalle de qué ventas deben para mostrarlo en Vue
+      // Traemos el detalle de qué ventas deben para mostrarlo en Vue.
+      //
+      // ⚠️ Filtramos por SALDO REAL, no por el flag `estadoPago`. Ese flag se
+      // desincronizó en producción (las deudas manuales nacían con el default
+      // 'PAGADO' del esquema) y la tarjeta terminaba mostrando la deuda del
+      // cliente con la lista de ventas vacía debajo: se veía el monto pero no
+      // había forma de cobrarlo. La plata es la fuente de verdad, no el flag.
       include: {
         ventas: {
-          where: { estadoPago: { not: 'PAGADO' } },
+          where: { totalPagado: { lt: this.prisma.venta.fields.totalVenta } },
           orderBy: { fecha: 'asc' } // Las más antiguas primero
         }
       }
@@ -32,20 +38,44 @@ export class CobranzasService {
   async registrarAbono(data: { clienteId: number, monto: number, metodoPago: string, referencia?: string }) {
     return this.prisma.$transaction(async (tx) => {
       let dineroDisponible = Number(data.monto);
+      if (!(dineroDisponible > 0)) {
+        throw new BadRequestException('El monto del abono debe ser mayor a cero.');
+      }
 
       // 1. Validamos al cliente
       const cliente = await tx.cliente.findUnique({ where: { id: data.clienteId }});
       if (!cliente) throw new BadRequestException('Cliente no encontrado');
-      
-      if (dineroDisponible > Number(cliente.saldoPendiente)) {
-        throw new BadRequestException(`El monto (S/ ${dineroDisponible}) supera la deuda total del cliente (S/ ${cliente.saldoPendiente}).`);
+
+      // 2. Buscamos sus ventas con deuda, de la más antigua a la más nueva.
+      //
+      // 🔒 Se seleccionan por SALDO REAL (totalPagado < totalVenta), NO por el
+      // flag `estadoPago`. Antes se filtraba por el flag y bastaba que estuviera
+      // mal puesto para que la deuda quedara imposible de cobrar: el cliente
+      // aparecía debiendo pero el abono no encontraba dónde aplicarse y reventaba
+      // con "No hay deudas pendientes registradas". Yendo por la plata, el cobro
+      // funciona igual aunque el flag esté mal, y el bucle lo deja corregido.
+      const ventasConDeuda = await tx.venta.findMany({
+        where: {
+          clienteId: data.clienteId,
+          totalPagado: { lt: this.prisma.venta.fields.totalVenta }
+        },
+        orderBy: { fecha: 'asc' }
+      });
+
+      // La deuda que realmente respaldan las ventas. `cliente.saldoPendiente` es
+      // solo un acumulado que puede venir desfasado, así que no se valida contra él.
+      const deudaReal = ventasConDeuda.reduce(
+        (suma, v) => suma + (Number(v.totalVenta) - Number(v.totalPagado)),
+        0
+      );
+
+      if (deudaReal <= 0) {
+        throw new BadRequestException('Este cliente no tiene ventas con saldo pendiente.');
       }
 
-      // 2. Buscamos todas sus ventas que aún no están pagadas, de la más antigua a la más nueva
-      const ventasConDeuda = await tx.venta.findMany({
-        where: { clienteId: data.clienteId, estadoPago: { not: 'PAGADO' } },
-        orderBy: { fecha: 'asc' } 
-      });
+      if (dineroDisponible > deudaReal) {
+        throw new BadRequestException(`El monto (S/ ${dineroDisponible.toFixed(2)}) supera la deuda real del cliente (S/ ${deudaReal.toFixed(2)}).`);
+      }
 
       // 3. Empezamos a pagar las ventas una por una hasta que se acabe la plata
       for (const venta of ventasConDeuda) {
@@ -99,14 +129,20 @@ export class CobranzasService {
       // Cuánto se pudo aplicar realmente a ventas (lo que quedó sin usar NO se descuenta)
       const totalAplicado = Number(data.monto) - dineroDisponible;
       if (totalAplicado <= 0) {
-        // No había ninguna venta pendiente donde registrar el abono → no descontamos a ciegas
-        throw new BadRequestException('No hay deudas pendientes registradas para aplicar este pago. Revisa las ventas del cliente.');
+        // No debería llegar aquí: `deudaReal` ya garantizó que había dónde aplicar.
+        // Queda como red de seguridad para no descontar a ciegas.
+        throw new BadRequestException('No se pudo aplicar el pago a ninguna venta. Revisa las ventas del cliente.');
       }
 
-      // 5. Finalmente, actualizamos la billetera principal del cliente (solo lo aplicado)
+      // 5. Actualizamos la billetera del cliente.
+      //
+      // 🔒 Se RECALCULA desde las ventas en vez de descontar a ciegas. Antes se
+      // hacía `decrement: monto`, y si la ficha venía desfasada el desfase se
+      // arrastraba para siempre. Así, cada cobro deja al cliente cuadrado con su
+      // ledger real: cualquier descuadre heredado se corrige solo al primer pago.
       const clienteActualizado = await tx.cliente.update({
         where: { id: data.clienteId },
-        data: { saldoPendiente: { decrement: totalAplicado } }
+        data: { saldoPendiente: deudaReal - totalAplicado }
       });
 
       return {

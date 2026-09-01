@@ -514,6 +514,11 @@ model Venta {
   
   // 🔥 NUEVO: Lógica de Pagos
   condicionPago   String   @default("CONTADO") // 'CONTADO', 'CREDITO_ESTRICTO', 'CREDITO_FLEXIBLE'
+  // ⚠️ OJO con este default: una Venta creada SIN pasar `estadoPago` nace como
+  // 'PAGADO'. Así se rompieron las deudas manuales en producción — la ficha del
+  // cliente sumaba la deuda, pero la venta ya salía marcada pagada y el abono no
+  // encontraba dónde aplicarse. SIEMPRE pásalo explícito al crear una venta.
+  // Cobranzas ya no confía en este campo: filtra por totalPagado < totalVenta.
   estadoPago      String   @default("PAGADO")  // 'PAGADO', 'PENDIENTE', 'PAGO_PARCIAL'
   
   metodoEntrega   String   
