@@ -1,11 +1,12 @@
 import { Module } from '@nestjs/common';
 import { ComprasController } from './compras.controller';
 import { ComprasService } from './compras.service';
+import { MercaderiaService } from './mercaderia.service';
 import { KardexModule } from '../kardex/kardex.module';
 
 @Module({
   imports: [KardexModule],
   controllers: [ComprasController],
-  providers: [ComprasService],
+  providers: [ComprasService, MercaderiaService],
 })
 export class ComprasModule {}

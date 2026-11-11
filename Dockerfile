@@ -41,6 +41,11 @@ RUN npm ci --only=production && npm cache clean --force
 # Copiar el código compilado desde builder
 COPY --from=builder /app/dist ./dist
 
+# Scripts de diagnóstico de base de datos (db:smoke, db:revisar).
+# Sin esto, `npm run db:smoke` no existe dentro del contenedor y no hay forma
+# de revisar si la base y el cliente de Prisma están de acuerdo.
+COPY scripts ./scripts
+
 # Crear carpeta uploads
 RUN mkdir -p uploads/logos
 
@@ -51,4 +56,8 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD node -e "require('http').get('http://127.0.0.1:3000/',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"
 
-CMD ["node", "dist/src/main"]
+# Al arrancar: PRIMERO se prepara la base, DESPUÉS arranca la API.
+# Este orden es lo que evita el error "column X does not exist": el cliente de
+# Prisma nunca consulta una columna antes de que exista. Si la preparación
+# falla, el `&&` corta y la API no arranca (mejor reiniciar que servir roto).
+CMD ["sh", "-c", "node prisma/aplicar-cambios.js && node dist/src/main"]
