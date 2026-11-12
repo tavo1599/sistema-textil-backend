@@ -9,25 +9,98 @@ export class InsumosService {
     private insumoKardex: InsumoKardexService,
   ) {}
 
+  // ==========================================================================
+  // CÓDIGO ÚNICO AUTOMÁTICO
+  // --------------------------------------------------------------------------
+  // El usuario ya no escribe el código: se arma solo según la categoría.
+  //   Tela     -> TEL-000001
+  //   Avío     -> AVI-000001
+  //   Empaque  -> EMP-000001
+  //   Etiqueta -> ETQ-000001
+  // ==========================================================================
+  private prefijoDe(tipo?: string): string {
+    const t = String(tipo || '')
+      .toUpperCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+    if (t.startsWith('TELA')) return 'TEL';
+    if (t.startsWith('AVIO')) return 'AVI';
+    if (t.startsWith('EMPAQUE')) return 'EMP';
+    if (t.startsWith('ETIQUETA')) return 'ETQ';
+    return 'MAT';
+  }
+
+  /**
+   * Devuelve el siguiente código libre del prefijo. Toma el correlativo más
+   * alto que ya exista y sigue subiendo hasta encontrar uno que nadie use, así
+   * no choca aunque alguien haya escrito códigos a mano antes.
+   */
+  private async siguienteCodigo(tx: any, tipo?: string): Promise<string> {
+    const prefijo = this.prefijoDe(tipo);
+    const usados: { codigo: string }[] = await tx.insumo.findMany({
+      where: { codigo: { startsWith: `${prefijo}-` } },
+      select: { codigo: true },
+    });
+
+    let maximo = 0;
+    for (const { codigo } of usados) {
+      const n = Number(String(codigo).slice(prefijo.length + 1));
+      if (Number.isFinite(n) && n > maximo) maximo = n;
+    }
+
+    for (let intento = 1; intento <= 100; intento++) {
+      const candidato = `${prefijo}-${String(maximo + intento).padStart(6, '0')}`;
+      const ocupado = await tx.insumo.findUnique({ where: { codigo: candidato } });
+      if (!ocupado) return candidato;
+    }
+
+    throw new BadRequestException(
+      'No se pudo generar un código único para el material. Intenta de nuevo.',
+    );
+  }
+
+  /** El proveedor es opcional, pero si lo mandan tiene que existir. */
+  private async validarProveedor(tx: any, proveedorId?: any): Promise<number | null> {
+    const id = Number(proveedorId);
+    if (!proveedorId || !Number.isFinite(id) || id <= 0) return null;
+    const proveedor = await tx.proveedor.findUnique({ where: { id } });
+    if (!proveedor) throw new BadRequestException(`El proveedor #${id} no existe.`);
+    return id;
+  }
+
   // 1. CREAR
   async create(data: any) {
-    // Validar que el código no exista para evitar caídas en Prisma
-    const existe = await this.prisma.insumo.findUnique({ where: { codigo: data.codigo } });
-    if (existe) throw new BadRequestException(`El código ${data.codigo} ya está registrado.`);
+    const nombre = String(data.nombre || '').trim();
+    if (!nombre) throw new BadRequestException('El nombre del material es obligatorio.');
 
+    // El peso / la cantidad que llegó. Es INFORMATIVO: dice cuánto entró al
+    // almacén, no se descuenta en Transformación (eso lo hacen los rollos).
     const stockInicial = Number(data.stockActual) || 0;
+    // El precio es OPCIONAL: si no lo saben todavía, entra en 0 y se corrige
+    // después con una compra o con una edición.
     const costoUnitario = Number(data.costoUnitario) || 0;
 
     return this.prisma.$transaction(async (tx) => {
+      const codigoPedido = String(data.codigo || '').trim();
+      if (codigoPedido) {
+        // Solo pasa si alguien llama a la API a mano con un código propio.
+        const existe = await tx.insumo.findUnique({ where: { codigo: codigoPedido } });
+        if (existe) throw new BadRequestException(`El código ${codigoPedido} ya está registrado.`);
+      }
+      const codigo = codigoPedido || (await this.siguienteCodigo(tx, data.tipo));
+      const proveedorId = await this.validarProveedor(tx, data.proveedorId);
+
       // Creamos el insumo SIN stock; el stock se carga vía kardex para dejar rastro.
       const insumo = await tx.insumo.create({
         data: {
-          codigo: data.codigo,
-          nombre: data.nombre,
+          codigo,
+          nombre,
           tipo: data.tipo,
           unidadMedida: data.unidadMedida,
           costoUnitario: costoUnitario,
           stockActual: 0,
+          color: String(data.color || '').trim() || null,
+          proveedorId,
         },
       });
 
@@ -48,10 +121,21 @@ export class InsumosService {
   }
 
   // 2. LEER TODOS
+  // Adjuntamos el nombre del proveedor a mano porque proveedorId no tiene
+  // llave foránea (ver el comentario del modelo Insumo). La tabla de
+  // proveedores es chica, así que traerla completa no cuesta nada.
   async findAll() {
-    return this.prisma.insumo.findMany({
-      orderBy: { id: 'desc' }
-    });
+    const [insumos, proveedores] = await Promise.all([
+      this.prisma.insumo.findMany({ orderBy: { id: 'desc' } }),
+      this.prisma.proveedor.findMany({ select: { id: true, razonSocial: true } }),
+    ]);
+
+    const nombrePorId = new Map(proveedores.map((p) => [p.id, p.razonSocial]));
+
+    return insumos.map((insumo) => ({
+      ...insumo,
+      proveedorNombre: insumo.proveedorId ? nombrePorId.get(insumo.proveedorId) ?? null : null,
+    }));
   }
 
   // 3. LEER UNO
@@ -70,14 +154,24 @@ export class InsumosService {
 
     return this.prisma.$transaction(async (tx) => {
       // Actualizamos los datos descriptivos (el stock NO se toca aquí directamente).
+      const proveedorId = await this.validarProveedor(tx, data.proveedorId);
+      const costoEditado = Number(data.costoUnitario);
+
       await tx.insumo.update({
         where: { id },
         data: {
-          codigo: data.codigo,
+          // El código ya no se edita desde la pantalla; si no llega, se queda
+          // el que se generó al registrar el material.
+          ...(String(data.codigo || '').trim()
+            ? { codigo: String(data.codigo).trim() }
+            : {}),
           nombre: data.nombre,
           tipo: data.tipo,
           unidadMedida: data.unidadMedida,
-          costoUnitario: Number(data.costoUnitario),
+          // El precio es opcional: si no lo mandan, no lo pisamos con un 0.
+          ...(Number.isFinite(costoEditado) ? { costoUnitario: costoEditado } : {}),
+          color: String(data.color || '').trim() || null,
+          proveedorId,
         },
       });
 
@@ -89,7 +183,9 @@ export class InsumosService {
           await this.insumoKardex.registrarIngreso(tx, {
             insumoId: id,
             cantidad: delta,
-            costoUnitario: Number(data.costoUnitario),
+            costoUnitario: Number.isFinite(costoEditado)
+              ? costoEditado
+              : Number(insumo.costoUnitario),
             motivo: 'Ajuste manual de stock (edición)',
             tipoMovimiento: 'AJUSTE',
           });
@@ -97,7 +193,9 @@ export class InsumosService {
           await this.insumoKardex.registrarSalida(tx, {
             insumoId: id,
             cantidad: Math.abs(delta),
-            costoUnitario: Number(data.costoUnitario),
+            costoUnitario: Number.isFinite(costoEditado)
+              ? costoEditado
+              : Number(insumo.costoUnitario),
             motivo: 'Ajuste manual de stock (edición)',
             tipoMovimiento: 'AJUSTE',
           });

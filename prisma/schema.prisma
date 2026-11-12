@@ -246,12 +246,22 @@ model ProductoImagen {
 
 model Insumo {
   id            Int     @id @default(autoincrement())
-  codigo        String  @unique
+  codigo        String  @unique // Se genera solo: TEL-000001, AVI-000002...
   nombre        String
   tipo          String // 'Tela', 'Avio', 'Empaque'
   unidadMedida  String
   costoUnitario Decimal @default(0.0000)
   stockActual   Decimal @default(0.00)
+
+  // ---------------------------------------------------------------------
+  // DATOS DEL INGRESO FÍSICO · SOLO INFORMATIVOS
+  // Sirven para saber QUÉ tela tengo, de QUÉ color y de QUIÉN vino.
+  // El consumo real (kilo por kilo, rollo por rollo) NO sale de aquí:
+  // vive en RolloTela y es lo único que usa Transformación.
+  // ---------------------------------------------------------------------
+  color       String? // Color de la tela o del avío
+  proveedorId Int? // Quién lo trajo. Sin llave foránea a propósito:
+  //                  ver la regla 5 de prisma/cambios_pendientes.sql
 
   boms           ProductoBom[]
   detallesCompra CompraDetalle[]

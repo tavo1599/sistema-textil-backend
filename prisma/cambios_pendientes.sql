@@ -177,3 +177,24 @@ CREATE TABLE IF NOT EXISTS "TransformacionDetalle" (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS "TransformacionDetalle_transformacionId_color_talla_key" ON "TransformacionDetalle"("transformacionId", "color", "talla");
+
+
+-- ===========================================================================
+-- BLOQUE H · DATOS DEL INGRESO FÍSICO EN Insumo
+-- ---------------------------------------------------------------------------
+-- Al registrar una tela o un avío ahora se puede guardar de qué COLOR es y
+-- quién lo TRAJO. Las dos columnas son opcionales y solo informativas: sirven
+-- para saber qué hay en el almacén. Transformación no las usa — ahí el consumo
+-- real sale de RolloTela, kilo por kilo.
+--
+-- "proveedorId" va SIN llave foránea a propósito: la regla 5 de este archivo
+-- dice que las llaves foráneas van dentro del CREATE TABLE, y "Insumo" ya
+-- existe (ALTER TABLE ADD CONSTRAINT no admite IF NOT EXISTS, así que en el
+-- segundo arranque reventaría). El backend valida que el proveedor exista
+-- antes de guardar.
+-- ===========================================================================
+ALTER TABLE "Insumo" ADD COLUMN IF NOT EXISTS "color" TEXT;
+
+ALTER TABLE "Insumo" ADD COLUMN IF NOT EXISTS "proveedorId" INTEGER;
+
+CREATE INDEX IF NOT EXISTS "Insumo_proveedorId_idx" ON "Insumo"("proveedorId");
