@@ -440,6 +440,10 @@ export class TransformacionesService {
     const porProducto: Record<string, any> = {};
     const porTalla: Record<string, number> = {};
     const porColor: Record<string, number> = {};
+    // Matriz color × talla: es como la gente mira la ropa (las tallas arriba,
+    // los colores a la izquierda). Guardamos lo cortado y lo recibido de cada
+    // casilla para que la pantalla pueda mostrar cualquiera de los dos.
+    const celdas: Record<string, { color: string; talla: string; cortadas: number; recibidas: number }> = {};
 
     for (const t of transformaciones) {
       kilosUsados += Number(t.pesoTotalUsado);
@@ -466,6 +470,13 @@ export class TransformacionesService {
       for (const d of t.detalles) {
         porTalla[d.talla] = (porTalla[d.talla] || 0) + d.cantidad;
         porColor[d.color] = (porColor[d.color] || 0) + d.cantidad;
+
+        const casilla = `${d.color}|${d.talla}`;
+        if (!celdas[casilla]) {
+          celdas[casilla] = { color: d.color, talla: d.talla, cortadas: 0, recibidas: 0 };
+        }
+        celdas[casilla].cortadas += d.cantidad;
+        celdas[casilla].recibidas += d.cantidadRecibida;
       }
     }
 
@@ -490,6 +501,13 @@ export class TransformacionesService {
         kilos: Number(p.kilos.toFixed(3)),
         rendimiento: p.kilos > 0 ? Number((p.recibidas / p.kilos).toFixed(2)) : 0,
       })),
+      // La matriz va cruda: la pantalla ordena las tallas con su propio orden
+      // natural (S, M, L, XL... no alfabético).
+      matriz: {
+        colores: [...new Set(Object.values(celdas).map((c) => c.color))],
+        tallas: [...new Set(Object.values(celdas).map((c) => c.talla))],
+        celdas: Object.values(celdas),
+      },
       porTalla: Object.entries(porTalla)
         .map(([talla, cantidad]) => ({ talla, cantidad }))
         .sort((a, b) => b.cantidad - a.cantidad),
