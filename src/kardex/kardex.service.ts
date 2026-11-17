@@ -154,6 +154,18 @@ export class KardexService {
       tipoMovimiento?: string; // por defecto 'SALIDA'
       referenciaId?: number | null;
       actualizarStockFisico?: boolean;
+      /**
+       * Deja que el stock físico quede en negativo.
+       *
+       * En el mostrador manda lo que pasó de verdad: si la prenda ya salió de
+       * la tienda, la salida se registra aunque el sistema marcara 0. El
+       * negativo NO es un error, es el aviso de que al sistema le falta un
+       * ingreso, y el conteo físico del almacén es el que lo endereza.
+       *
+       * El kardex valorizado nunca baja de cero (ver `stockValorado` más
+       * abajo), así que el costeo no se descuadra por esto.
+       */
+      permitirNegativo?: boolean;
     },
   ) {
     const cantidad = Math.trunc(Number(params.cantidad));
@@ -185,23 +197,47 @@ export class KardexService {
 
     // 3. (Opcional) descontar stock físico de la bodega
     if (params.actualizarStockFisico) {
-      const fisico = await tx.inventarioTerminado.findFirst({
-        where: {
-          productoId: params.productoId,
-          bodegaId: params.bodegaId,
-          color: params.color,
-          talla: params.talla,
-        },
-      });
-      if (!fisico || fisico.stock < cantidad) {
-        throw new BadRequestException(
-          `Stock insuficiente para producto ${params.productoId} (${params.color}-${params.talla}). Disponible: ${fisico?.stock ?? 0}`,
-        );
+      if (params.permitirNegativo) {
+        // upsert y no update: la tienda puede haber entregado una variante que
+        // el sistema todavía no tenía registrada (color o talla que nunca se
+        // ingresó). Se crea la fila en negativo para que la falta se vea.
+        await tx.inventarioTerminado.upsert({
+          where: {
+            productoId_bodegaId_color_talla: {
+              productoId: params.productoId,
+              bodegaId: params.bodegaId,
+              color: params.color,
+              talla: params.talla,
+            },
+          },
+          create: {
+            productoId: params.productoId,
+            bodegaId: params.bodegaId,
+            color: params.color,
+            talla: params.talla,
+            stock: -cantidad,
+          },
+          update: { stock: { decrement: cantidad } },
+        });
+      } else {
+        const fisico = await tx.inventarioTerminado.findFirst({
+          where: {
+            productoId: params.productoId,
+            bodegaId: params.bodegaId,
+            color: params.color,
+            talla: params.talla,
+          },
+        });
+        if (!fisico || fisico.stock < cantidad) {
+          throw new BadRequestException(
+            `Stock insuficiente para producto ${params.productoId} (${params.color}-${params.talla}). Disponible: ${fisico?.stock ?? 0}`,
+          );
+        }
+        await tx.inventarioTerminado.update({
+          where: { id: fisico.id },
+          data: { stock: { decrement: cantidad } },
+        });
       }
-      await tx.inventarioTerminado.update({
-        where: { id: fisico.id },
-        data: { stock: { decrement: cantidad } },
-      });
     }
 
     // 4. Fila del kardex valorizado (cantidad negativa, costo = promedio vigente)

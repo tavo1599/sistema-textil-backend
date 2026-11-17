@@ -36,9 +36,22 @@ export class VentasService {
       let totalPrendasVendidas = 0;
 
       // ========================================================
-      // 1. VALIDAR STOCK Y SUMAR TOTALES
+      // 1. SUMAR TOTALES Y ANOTAR LO QUE NO CUADRA CON EL STOCK
       //    (el descuento físico + kardex valorizado se hace en el paso 4)
+      //
+      // 🔓 LA VENTA YA NO SE RECHAZA POR STOCK.
+      // Antes, si el sistema marcaba 0, la venta se caía con "Stock
+      // insuficiente" aunque la prenda ya estuviera en la bolsa del cliente.
+      // En la tienda el físico casi siempre va adelante del sistema (ingresos
+      // sin registrar, devoluciones, prendas que volvieron del taller), y
+      // frenar el cobro por eso dejaba al cajero sin poder vender.
+      //
+      // Ahora la venta se registra, el stock queda en negativo y eso es
+      // justamente el aviso de que falta un ingreso: aparece en el conteo
+      // físico del almacén, que es donde se endereza.
       // ========================================================
+      const avisosStock: string[] = [];
+
       for (const item of dto.detalles) {
         const registroStock = await tx.inventarioTerminado.findUnique({
           where: {
@@ -51,9 +64,15 @@ export class VentasService {
           }
         });
 
-        if (!registroStock || registroStock.stock < item.cantidad) {
-          throw new BadRequestException(
-            `Stock insuficiente para el producto ID ${item.productoId} (${item.color} - Talla ${item.talla}) en esta bodega. Stock actual: ${registroStock?.stock || 0}`
+        const disponible = Number(registroStock?.stock ?? 0);
+        if (disponible < Number(item.cantidad)) {
+          const prenda = await tx.producto.findUnique({
+            where: { id: Number(item.productoId) },
+            select: { nombre: true },
+          });
+          avisosStock.push(
+            `${prenda?.nombre || `Producto ${item.productoId}`} (${item.color} · T. ${item.talla}): ` +
+            `se vendieron ${item.cantidad} y el sistema registraba ${disponible}. Revisar inventario.`
           );
         }
 
@@ -141,6 +160,9 @@ export class VentasService {
           tipoMovimiento: 'SALIDA',
           referenciaId: nuevaVenta.id,
           actualizarStockFisico: true, // descuenta InventarioTerminado
+          // La prenda ya salió de la tienda: el descuento se hace igual y el
+          // stock queda en negativo si hacía falta (ver el paso 1).
+          permitirNegativo: true,
         });
       }
 
@@ -219,7 +241,10 @@ export class VentasService {
         totalFacturado: totalVenta.toFixed(2),
         totalCobrado: montoAdelanto.toFixed(2),
         saldoPendiente: saldoRestante.toFixed(2),
-        fecha: nuevaVenta.fecha
+        fecha: nuevaVenta.fecha,
+        // Prendas que se vendieron por encima de lo que registraba el sistema.
+        // La caja las muestra como aviso; la venta ya quedó registrada.
+        avisosStock,
       };
     });
   }
@@ -756,18 +781,26 @@ export class VentasService {
         const cant = Number(it.cantidad);
         if (cant <= 0) continue;
 
-        const stockItem = await tx.inventarioTerminado.findFirst({
-          where: { productoId: Number(it.productoId), bodegaId, color: it.color, talla: it.talla },
-        });
-        if (!stockItem || stockItem.stock < cant) {
-          throw new BadRequestException(
-            `No hay stock suficiente de la prenda que se lleva (${it.color} / ${it.talla}).`,
-          );
-        }
-
-        await tx.inventarioTerminado.update({
-          where: { id: stockItem.id },
-          data: { stock: stockItem.stock - cant },
+        // Mismo criterio que la venta: la prenda que el cliente se lleva ya
+        // salió de la tienda, así que el cambio no se rechaza por stock. Si el
+        // sistema no la tenía, la fila queda en negativo y el conteo la arregla.
+        await tx.inventarioTerminado.upsert({
+          where: {
+            productoId_bodegaId_color_talla: {
+              productoId: Number(it.productoId),
+              bodegaId,
+              color: it.color,
+              talla: it.talla,
+            },
+          },
+          create: {
+            productoId: Number(it.productoId),
+            bodegaId,
+            color: it.color,
+            talla: it.talla,
+            stock: -cant,
+          },
+          update: { stock: { decrement: cant } },
         });
 
         await tx.movimientoInventario.create({
