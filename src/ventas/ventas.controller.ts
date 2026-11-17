@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Get, Param, Query, Req, UseGuards } from '@nestjs/common';
+import { Controller, Post, Patch, Body, Get, Param, Query, Req, UseGuards } from '@nestjs/common';
 import { VentasService } from './ventas.service';
 import { CreateVentaDto } from './dto/create-venta.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -47,6 +47,21 @@ export class VentasController {
   @Get('detalle/:id')
   obtenerDetalleVenta(@Param('id') id: string) {
     return this.ventasService.obtenerDetalleVenta(Number(id));
+  }
+
+  /**
+   * CUADRAR LAS VARIANTES DE UNA VENTA SURTIDA.
+   * Cuando se vendió sin elegir talla/color (líneas GENERAL/UNICA o sin talla),
+   * desde la vista de Ventas se reparte cada línea en las variantes reales. No
+   * cambia el dinero de la venta: solo mueve el stock del placeholder a las
+   * tallas/colores de verdad.
+   */
+  @Patch(':id/cuadrar-variantes')
+  cuadrarVariantes(
+    @Param('id') id: string,
+    @Body() body: { lineas: { detalleId: number; reparto: { color?: string; talla?: string; cantidad: number }[] }[] },
+  ) {
+    return this.ventasService.cuadrarVariantes(Number(id), body?.lineas || []);
   }
 
   // --- CIERRE DE CAJA ---

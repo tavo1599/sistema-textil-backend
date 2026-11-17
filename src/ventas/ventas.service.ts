@@ -282,14 +282,25 @@ export class VentasService {
       }
     });
 
+    // Una línea está "surtida" (pendiente de cuadrar) si se vendió sin talla/color
+    // de verdad: placeholder GENERAL/UNICA o talla vacía.
+    const esSurtida = (d: any) =>
+      d.color === 'GENERAL' || d.talla === 'UNICA' || !String(d.talla ?? '').trim();
+
     const ultimasVentas = ventasBD.map(venta => ({
       id: venta.id,
       correlativo: venta.correlativo || `VEN-${String(venta.id).padStart(5, '0')}`,
       createdAt: venta.fecha,
+      cliente: venta.clienteNombre || 'Público General',
       metodoPago: venta.condicionPago || 'CONTADO',
       almacen: venta.bodega?.nombre || 'Almacén Principal',
+      bodegaId: venta.bodegaId,
+      prendas: venta.detalles.reduce((s, d) => s + Number(d.cantidad), 0),
       total: Number(venta.totalVenta),
-      estado: venta.estadoPago === 'PAGADO' ? 'Completada' : 'Crédito / Pendiente'
+      estadoPago: venta.estadoPago,
+      estado: venta.estadoPago === 'PAGADO' ? 'Completada' : 'Crédito / Pendiente',
+      // Para el botón "cuadrar tallas" de la vista de Ventas.
+      tieneSurtido: venta.detalles.some(esSurtida),
     }));
 
     const hoy = new Date();
@@ -399,6 +410,136 @@ export class VentasService {
   // Lee el último número registrado y suma 1, evitando
   // colisiones si dos ventas se registran al mismo tiempo.
   // ========================================================
+  // ========================================================
+  // CUADRAR LAS VARIANTES DE UNA VENTA SURTIDA
+  // --------------------------------------------------------
+  // Se vendió sin elegir talla/color (líneas GENERAL/UNICA o sin talla) y el
+  // stock se descontó de un "placeholder". Aquí, desde la vista de Ventas, se
+  // reparte cada línea en las variantes reales. El dinero NO cambia: el reparto
+  // suma exactamente lo que se vendió y mantiene el precio. Lo que se mueve es
+  // el stock: se devuelve al placeholder y se descuenta de las tallas/colores
+  // de verdad (igual de honesto que el conteo: puede quedar en negativo si al
+  // almacén le falta un ingreso, y el conteo físico lo cuadra).
+  // ========================================================
+  async cuadrarVariantes(
+    ventaId: number,
+    lineas: { detalleId: number; reparto: { color?: string; talla?: string; cantidad: number }[] }[],
+  ) {
+    if (!lineas?.length) {
+      throw new BadRequestException('No hay líneas que cuadrar.');
+    }
+
+    const norm = (v: any, porDefecto: string) => {
+      const t = String(v ?? '').trim();
+      return t === '' ? porDefecto : t;
+    };
+
+    return this.prisma.$transaction(async (tx) => {
+      const venta = await tx.venta.findUnique({
+        where: { id: ventaId },
+        include: { detalles: true },
+      });
+      if (!venta) throw new BadRequestException('Venta no encontrada.');
+      const ref = venta.correlativo || `venta #${venta.id}`;
+
+      const moverStock = async (
+        productoId: number,
+        color: string,
+        talla: string,
+        delta: number, // + entra, - sale
+        tipo: string,
+        motivo: string,
+      ) => {
+        await tx.inventarioTerminado.upsert({
+          where: {
+            productoId_bodegaId_color_talla: {
+              productoId,
+              bodegaId: venta.bodegaId,
+              color,
+              talla,
+            },
+          },
+          create: { productoId, bodegaId: venta.bodegaId, color, talla, stock: delta },
+          update: { stock: { increment: delta } },
+        });
+        await tx.movimientoInventario.create({
+          data: {
+            tipoMovimiento: tipo,
+            motivo,
+            cantidad: delta,
+            productoId,
+            color,
+            talla,
+            bodegaId: venta.bodegaId,
+          },
+        });
+      };
+
+      for (const linea of lineas) {
+        const detalle = venta.detalles.find((d) => d.id === Number(linea.detalleId));
+        if (!detalle) {
+          throw new BadRequestException('Una de las líneas no pertenece a esta venta.');
+        }
+
+        const reparto = (linea.reparto || [])
+          .map((r) => ({
+            // Si la prenda no tiene color, se queda en el del placeholder.
+            color: norm(r.color, detalle.color),
+            talla: norm(r.talla, TALLA_UNICA),
+            cantidad: Math.trunc(Number(r.cantidad) || 0),
+          }))
+          .filter((r) => r.cantidad > 0);
+
+        if (reparto.length === 0) continue;
+
+        const suma = reparto.reduce((s, r) => s + r.cantidad, 0);
+        if (suma !== detalle.cantidad) {
+          throw new BadRequestException(
+            `El reparto de ${detalle.color}/${detalle.talla} suma ${suma}, ` +
+              `pero se vendieron ${detalle.cantidad}. Debe cuadrar exacto.`,
+          );
+        }
+
+        // 1. Devolver al placeholder el stock que esta línea había descontado.
+        await moverStock(
+          detalle.productoId,
+          detalle.color,
+          detalle.talla,
+          detalle.cantidad,
+          'AJUSTE',
+          `Cuadre de ${ref}: deshace surtido ${detalle.color}/${detalle.talla}`,
+        );
+
+        // 2. Reemplazar la línea por las variantes reales (mismo precio/total).
+        await tx.ventaDetalle.delete({ where: { id: detalle.id } });
+        const precio = Number(detalle.precioUnitario);
+        for (const r of reparto) {
+          await tx.ventaDetalle.create({
+            data: {
+              ventaId: venta.id,
+              productoId: detalle.productoId,
+              color: r.color,
+              talla: r.talla,
+              cantidad: r.cantidad,
+              precioUnitario: precio,
+              subtotal: Number((precio * r.cantidad).toFixed(2)),
+            },
+          });
+          await moverStock(
+            detalle.productoId,
+            r.color,
+            r.talla,
+            -r.cantidad,
+            'VENTA',
+            `Cuadre de ${ref}: ${r.color}/${r.talla}`,
+          );
+        }
+      }
+
+      return { ok: true, mensaje: 'Tallas y colores cuadrados. El stock quedó ajustado.' };
+    });
+  }
+
   // ========================================================
   // DEVOLUCIONES / CAMBIOS
   // Devuelve prendas de una venta: reingresa el stock al almacén,
@@ -701,6 +842,7 @@ export class VentasService {
       saldo: Number(venta.totalVenta) - Number(venta.totalPagado),
       detalles: venta.detalles.map((d) => ({
         id: d.id,
+        productoId: d.productoId,
         producto: d.producto?.nombre,
         sku: d.producto?.skuBase,
         color: nombreDeColor(d.color), // nombre legible, ej. "NEGRO" en vez de "NGR"
