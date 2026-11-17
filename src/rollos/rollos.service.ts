@@ -1,5 +1,9 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  ESTADOS_TRANSFORMACION_PENDIENTE,
+  recalcularCierreRollos,
+} from './cierre-rollos';
 
 /**
  * RollosService — ALMACÉN DE TELA EN ROLLOS
@@ -15,6 +19,31 @@ import { PrismaService } from '../prisma/prisma.service';
  * Cada cambio de peso deja una fila en MovimientoRollo, así nunca hay que
  * adivinar por qué un rollo que entró con 25 kg hoy tiene 3 kg.
  */
+/**
+ * ORDEN EN QUE SE LEE EL ALMACÉN.
+ * Primero lo que se puede usar, al final lo que ya no. Dentro de cada grupo,
+ * por color (así los rollos del mismo color salen juntos) y luego por código.
+ */
+const PESO_DE_GRUPO: Record<string, number> = {
+  CON_KILOS: 0,
+  EN_TRANSFORMACION: 1,
+  SIN_KILOS: 2,
+  CERRADO: 3,
+  ANULADO: 4,
+};
+
+function ordenDeAlmacen(a: any, b: any): number {
+  const porGrupo = (PESO_DE_GRUPO[a.grupo] ?? 9) - (PESO_DE_GRUPO[b.grupo] ?? 9);
+  if (porGrupo !== 0) return porGrupo;
+
+  const porColor = String(a.color || '').localeCompare(String(b.color || ''), 'es');
+  if (porColor !== 0) return porColor;
+
+  return String(a.codigo || '').localeCompare(String(b.codigo || ''), 'es', {
+    numeric: true,
+  });
+}
+
 @Injectable()
 export class RollosService {
   constructor(private prisma: PrismaService) {}
@@ -33,21 +62,97 @@ export class RollosService {
 
   // =========================================================================
   // LISTAR con filtros opcionales
+  // -------------------------------------------------------------------------
+  // Devuelve los rollos YA CLASIFICADOS y en orden, que es como se leen en la
+  // pantalla y en el reporte:
+  //
+  //    1º  los que tienen kilos         → agrupados por color
+  //    2º  los que están en 0 kg pero su tela sigue en el taller
+  //    3º  (solo si se piden) los cerrados y los anulados
+  //
+  // Los CERRADOS no vienen por defecto: su tela ya llegó al almacén como
+  // prenda y no hay nada que hacer con ellos. Se piden a propósito con
+  // incluirCerrados / soloCerrados para consultar su detalle.
   // =========================================================================
-  async listar(filtros: { estado?: string; color?: string; proveedorId?: number } = {}) {
-    return this.prisma.rolloTela.findMany({
+  async listar(
+    filtros: {
+      estado?: string;
+      color?: string;
+      proveedorId?: number;
+      incluirCerrados?: boolean;
+      soloCerrados?: boolean;
+    } = {},
+  ) {
+    const cerrados = filtros.soloCerrados
+      ? { cerradoEn: { not: null } }
+      : filtros.incluirCerrados
+        ? {}
+        : { cerradoEn: null };
+
+    const rollos = await this.prisma.rolloTela.findMany({
       where: {
         // Por defecto escondemos los anulados: son errores de registro.
         ...(filtros.estado ? { estado: filtros.estado } : { estado: { not: 'ANULADO' } }),
         ...(filtros.color ? { color: filtros.color } : {}),
         ...(filtros.proveedorId ? { proveedorId: filtros.proveedorId } : {}),
+        ...cerrados,
       },
       include: {
         proveedor: { select: { id: true, razonSocial: true } },
         insumo: { select: { id: true, nombre: true } },
+        // Para saber si la tela que falta está todavía en el taller.
+        consumos: {
+          select: {
+            pesoUsado: true,
+            transformacion: {
+              select: { id: true, codigo: true, estado: true, fecha: true },
+            },
+          },
+        },
       },
-      orderBy: [{ estado: 'asc' }, { id: 'desc' }],
     });
+
+    return rollos.map((r) => this.clasificar(r)).sort(ordenDeAlmacen);
+  }
+
+  /**
+   * Le agrega al rollo lo que la pantalla necesita saber de un vistazo:
+   * en qué cortes anda su tela y a qué grupo pertenece.
+   */
+  private clasificar(rollo: any) {
+    const { consumos, ...resto } = rollo;
+
+    const cortes = (consumos || []).map((c: any) => ({
+      id: c.transformacion?.id,
+      codigo: c.transformacion?.codigo,
+      estado: c.transformacion?.estado,
+      fecha: c.transformacion?.fecha,
+      kilos: Number(c.pesoUsado) || 0,
+    }));
+
+    const cortesPendientes = cortes.filter((c: any) =>
+      ESTADOS_TRANSFORMACION_PENDIENTE.includes(c.estado),
+    );
+
+    const grupo =
+      resto.estado === 'ANULADO'
+        ? 'ANULADO'
+        : resto.cerradoEn
+          ? 'CERRADO'
+          : Number(resto.pesoActual) > 0
+            ? 'CON_KILOS'
+            : cortesPendientes.length > 0
+              ? 'EN_TRANSFORMACION'
+              : 'SIN_KILOS';
+
+    return {
+      ...resto,
+      cortes,
+      cortesPendientes,
+      enTransformacion: cortesPendientes.length > 0,
+      cerrado: !!resto.cerradoEn,
+      grupo,
+    };
   }
 
   // =========================================================================
@@ -68,10 +173,23 @@ export class RollosService {
   // RESUMEN para las tarjetas de arriba de la vista
   // =========================================================================
   async resumen() {
-    const rollos = await this.prisma.rolloTela.findMany({
+    const todos = await this.prisma.rolloTela.findMany({
       where: { estado: { not: 'ANULADO' } },
-      select: { color: true, pesoActual: true, pesoInicial: true, estado: true, costoPorKilo: true },
+      select: {
+        color: true,
+        pesoActual: true,
+        pesoInicial: true,
+        estado: true,
+        costoPorKilo: true,
+        cerradoEn: true,
+      },
     });
+
+    // Las tarjetas hablan del almacén de HOY, así que los rollos cerrados no
+    // entran en los totales: su tela ya es prenda y está contada en el
+    // almacén de terminados. Se informan aparte para que no "desaparezcan".
+    const rollos = todos.filter((r) => !r.cerradoEn);
+    const cerrados = todos.filter((r) => r.cerradoEn);
 
     let kilosDisponibles = 0;
     let kilosIngresados = 0;
@@ -93,6 +211,11 @@ export class RollosService {
       totalRollos: rollos.length,
       rollosDisponibles: rollos.filter((r) => Number(r.pesoActual) > 0).length,
       rollosConsumidos: rollos.filter((r) => Number(r.pesoActual) <= 0).length,
+      // Rollos que ya se cerraron: toda su tela llegó al almacén como prenda.
+      rollosCerrados: cerrados.length,
+      kilosConvertidos: Number(
+        cerrados.reduce((t, r) => t + Number(r.pesoInicial), 0).toFixed(3),
+      ),
       kilosDisponibles: Number(kilosDisponibles.toFixed(3)),
       kilosIngresados: Number(kilosIngresados.toFixed(3)),
       kilosConsumidos: Number((kilosIngresados - kilosDisponibles).toFixed(3)),
@@ -218,7 +341,13 @@ export class RollosService {
         },
       });
 
-      return actualizado;
+      // Si quedó en 0 y no tiene cortes pendientes, se cierra. Si volvió a
+      // tener kilos, se reabre. La regla vive en cierre-rollos.ts.
+      const cierre = await recalcularCierreRollos(tx, [id]);
+
+      // Releemos para devolver el rollo como quedó (incluido cerradoEn).
+      const fresco = await tx.rolloTela.findUnique({ where: { id } });
+      return { ...(fresco || actualizado), ...cierre };
     });
   }
 

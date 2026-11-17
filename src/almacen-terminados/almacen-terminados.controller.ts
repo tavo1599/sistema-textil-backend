@@ -22,8 +22,10 @@ export class AlmacenTerminadosController {
   @Get('inventario')
   getInventario() { return this.almacenService.getInventario(); }
 
+  // El CONTEO FÍSICO lo hace también el vendedor: si en el mostrador aparece una
+  // variante que el sistema no tenía (un color/talla nuevo), la crea desde ahí.
   @Post('inventario')
-  @Roles('ADMIN')
+  @Roles('ADMIN', 'VENDEDOR')
   addInventario(@Body() body: any) { return this.almacenService.addInventario(body); }
 
   @Post('traslado')
@@ -50,8 +52,10 @@ export class AlmacenTerminadosController {
     return this.almacenService.revertirIngreso(body);
   }
 
+  // Ajuste de inventario: es el guardado del CONTEO FÍSICO (corrige la cantidad
+  // a lo que de verdad hay en el almacén). El vendedor que cuenta lo necesita.
   @Post('ajustar-stock')
-  @Roles('ADMIN')
+  @Roles('ADMIN', 'VENDEDOR')
   ajustarStock(@Body() body: any) {
     return this.almacenService.ajustarStockManual(body);
   }

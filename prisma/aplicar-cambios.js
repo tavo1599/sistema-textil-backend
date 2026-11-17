@@ -44,6 +44,7 @@ const COLUMNAS_ESPERADAS = [
   ['Producto', 'codigoBarras'],
   ['Insumo', 'color'],
   ['Insumo', 'proveedorId'],
+  ['RolloTela', 'cerradoEn'],
 ];
 const TABLAS_ESPERADAS = [
   'RolloTela',

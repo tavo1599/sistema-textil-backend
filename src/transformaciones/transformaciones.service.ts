@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { recalcularCierreRollos } from '../rollos/cierre-rollos';
 import { KardexService } from '../kardex/kardex.service';
 
 /**
@@ -192,6 +193,15 @@ export class TransformacionesService {
         });
       }
 
+      // Un rollo que quedó en 0 kg NO se cierra acá: su tela está en el taller
+      // y vuelve si el corte se anula. Se queda a la vista, al final de la
+      // lista, marcado "en transformación". Llamamos igual al recalculador
+      // para que la regla de cierre se decida siempre en un solo sitio.
+      await recalcularCierreRollos(
+        tx,
+        lineasRollo.map((l) => l.rolloId),
+      );
+
       return transformacion;
     });
   }
@@ -300,7 +310,7 @@ export class TransformacionesService {
       const cortadas = detallesFinales.reduce((s, d) => s + d.cantidad, 0);
       const llegadas = detallesFinales.reduce((s, d) => s + d.cantidadRecibida, 0);
 
-      return tx.transformacion.update({
+      const actualizada = await tx.transformacion.update({
         where: { id },
         data: {
           prendasRecibidas: llegadas,
@@ -309,6 +319,22 @@ export class TransformacionesService {
         },
         include: { detalles: true, producto: { select: { nombre: true } } },
       });
+
+      // ---- Cerrar los rollos que ya no tienen nada que hacer ----
+      // Si el corte quedó RECIBIDO y el rollo está en 0 kg, toda su tela acaba
+      // de llegar al almacén convertida en prenda: el rollo se cierra y
+      // desaparece del almacén de tela. Si quedó PARCIAL, sigue pendiente y el
+      // rollo se mantiene a la vista. La regla está en cierre-rollos.ts.
+      const lineas = await tx.transformacionRollo.findMany({
+        where: { transformacionId: id },
+        select: { rolloId: true },
+      });
+      const cierre = await recalcularCierreRollos(
+        tx,
+        lineas.map((l) => l.rolloId),
+      );
+
+      return { ...actualizada, rollosCerrados: cierre.cerrados };
     });
   }
 
@@ -357,7 +383,7 @@ export class TransformacionesService {
         });
       }
 
-      return tx.transformacion.update({
+      const anulada = await tx.transformacion.update({
         where: { id },
         data: {
           estado: 'ANULADO',
@@ -366,6 +392,15 @@ export class TransformacionesService {
             .join(' | '),
         },
       });
+
+      // La tela volvió: si alguno de estos rollos estaba cerrado, se reabre y
+      // vuelve a aparecer en el almacén con sus kilos.
+      const cierre = await recalcularCierreRollos(
+        tx,
+        transformacion.rollos.map((l) => l.rolloId),
+      );
+
+      return { ...anulada, rollosReabiertos: cierre.reabiertos };
     });
   }
 

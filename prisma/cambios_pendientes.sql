@@ -198,3 +198,49 @@ ALTER TABLE "Insumo" ADD COLUMN IF NOT EXISTS "color" TEXT;
 ALTER TABLE "Insumo" ADD COLUMN IF NOT EXISTS "proveedorId" INTEGER;
 
 CREATE INDEX IF NOT EXISTS "Insumo_proveedorId_idx" ON "Insumo"("proveedorId");
+
+
+-- ===========================================================================
+-- BLOQUE I · ROLLOS CERRADOS (la tela que ya se convirtió en prenda)
+-- ---------------------------------------------------------------------------
+-- Un rollo que llegó a 0 kg todavía NO está terminado: sus kilos andan por el
+-- taller como prendas cortadas, y si el corte se anula la tela vuelve al
+-- rollo. Recién cuando la producción entra al almacén (la transformación pasa
+-- a RECIBIDO) ya no hay nada que hacer con ese rollo: ahí se CIERRA y
+-- desaparece del almacén de tela y del reporte.
+--
+-- Se cierra y NO se borra, por cuatro razones:
+--   1. El código se repetiría: el correlativo R-000123 sale del id más alto de
+--      la tabla, así que borrar el último hace que el próximo rollo nazca con
+--      ese mismo código. Borrar es justo lo que provoca la repetición.
+--   2. Se perdería el costo de las prendas: TransformacionRollo guarda el
+--      costo por kilo congelado del corte y de ahí sale cuánto costó cada
+--      prenda que hoy está en almacén.
+--   3. Se perdería la auditoría de MovimientoRollo ("entró con 25 kg, ¿dónde
+--      se fueron?").
+--   4. No se podría anular un corte: al anularlo la tela regresa al rollo.
+--
+-- "cerradoEn" es NULL mientras el rollo siga vivo. El backend lo pone y lo
+-- quita solo (src/rollos/cierre-rollos.ts).
+-- ===========================================================================
+ALTER TABLE "RolloTela" ADD COLUMN IF NOT EXISTS "cerradoEn" TIMESTAMP(3);
+
+CREATE INDEX IF NOT EXISTS "RolloTela_cerradoEn_idx" ON "RolloTela"("cerradoEn");
+
+-- Cierra de una vez los rollos que YA estaban agotados y liquidados antes de
+-- este cambio, para que el almacén quede limpio desde el primer arranque.
+-- Esta sentencia es segura de repetir: solo toca rollos sin fecha de cierre
+-- que están en 0 kg y sin ningún corte pendiente. En cada arranque actúa como
+-- un reconciliador: si algo quedó a medias, lo deja consistente.
+UPDATE "RolloTela" r
+   SET "cerradoEn" = now()
+ WHERE r."cerradoEn" IS NULL
+   AND r."estado" <> 'ANULADO'
+   AND r."pesoActual" <= 0
+   AND NOT EXISTS (
+     SELECT 1
+       FROM "TransformacionRollo" tr
+       JOIN "Transformacion" t ON t."id" = tr."transformacionId"
+      WHERE tr."rolloId" = r."id"
+        AND t."estado" IN ('EN_PROCESO', 'PARCIAL')
+   );

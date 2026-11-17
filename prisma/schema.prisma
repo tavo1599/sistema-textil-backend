@@ -789,6 +789,16 @@ model RolloTela {
   // CONSUMIDO  = se acabó      | ANULADO = registrado por error
   estado String @default("DISPONIBLE")
 
+  /// CUÁNDO SE CERRÓ EL ROLLO (null = sigue vivo en el almacén).
+  /// Un rollo se cierra cuando ya no queda nada que hacer con él: 0 kg y
+  /// ninguna transformación pendiente, es decir toda su tela ya llegó al
+  /// almacén convertida en prenda. Un rollo cerrado desaparece del almacén y
+  /// del reporte, pero NO se borra: su código nunca se reusa y su historial
+  /// (de qué proveedor vino, a qué cortes se fue, a qué costo) sigue entero,
+  /// porque de ahí sale el costo de las prendas que produjo.
+  /// Se reabre solo si se le vuelve a poner peso o si se anula el corte.
+  cerradoEn DateTime?
+
   fechaIngreso DateTime @default(now())
   observacion  String?
 
@@ -804,6 +814,7 @@ model RolloTela {
 
   @@index([estado])
   @@index([color])
+  @@index([cerradoEn])
 }
 
 /// Historial de kilos de cada rollo. Permite auditar por qué un rollo que entró

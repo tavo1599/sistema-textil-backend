@@ -30,9 +30,17 @@ export class VentasController {
     return this.ventasService.obtenerReporteGeneral(fecha);
   }
 
+  /**
+   * Traduce lo que disparó la pistola a una línea de carrito.
+   * ?bodegaId=3 (opcional) para que el stock que devuelve sea el de ESA bodega.
+   * No exige stock: la caja vende en cero y el conteo físico cuadra después.
+   */
   @Get('escanear/:codigo')
-  escanearCodigo(@Param('codigo') codigo: string) {
-    return this.ventasService.buscarPorCodigoEscaner(codigo);
+  escanearCodigo(@Param('codigo') codigo: string, @Query('bodegaId') bodegaId?: string) {
+    return this.ventasService.buscarPorCodigoEscaner(
+      codigo,
+      bodegaId ? Number(bodegaId) : undefined,
+    );
   }
 
   // Detalle completo de una venta (modal del reporte)

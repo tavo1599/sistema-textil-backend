@@ -22,17 +22,29 @@ export class RollosController {
     return this.rollos.disponibles();
   }
 
-  /** Listado con filtros: ?estado=DISPONIBLE&color=Negro&proveedorId=3 */
+  /**
+   * Listado con filtros: ?estado=DISPONIBLE&color=Negro&proveedorId=3
+   *
+   * Los rollos CERRADOS (0 kg y su tela ya llegó al almacén como prenda) no
+   * salen por defecto. Para consultarlos:
+   *   ?soloCerrados=1     → únicamente los cerrados
+   *   ?incluirCerrados=1  → los vivos y los cerrados juntos
+   */
   @Get()
   listar(
     @Query('estado') estado?: string,
     @Query('color') color?: string,
     @Query('proveedorId') proveedorId?: string,
+    @Query('incluirCerrados') incluirCerrados?: string,
+    @Query('soloCerrados') soloCerrados?: string,
   ) {
+    const siOno = (v?: string) => v === '1' || v === 'true' || v === 'si';
     return this.rollos.listar({
       estado,
       color,
       proveedorId: proveedorId ? Number(proveedorId) : undefined,
+      incluirCerrados: siOno(incluirCerrados),
+      soloCerrados: siOno(soloCerrados),
     });
   }
 

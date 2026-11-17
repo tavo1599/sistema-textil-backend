@@ -2,6 +2,7 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateVentaDto } from './dto/create-venta.dto'; 
 import { KardexService } from '../kardex/kardex.service';
+import { COLOR_GENERAL, TALLA_UNICA } from '../compras/mercaderia.service';
 
 @Injectable()
 export class VentasService {
@@ -322,41 +323,74 @@ export class VentasService {
   // ========================================================
   // 🟢 ESCÁNER DE PUNTO DE VENTA (Conecta QR con Inventario)
   // ========================================================
-  async buscarPorCodigoEscaner(codigo: string) {
-    // 1. Buscamos el código exacto de la etiqueta en la tabla StockPrenda
+  /**
+   * LO QUE DISPARÓ LA PISTOLA, TRADUCIDO A UNA LÍNEA DE CARRITO.
+   *
+   * Dos cambios importantes respecto de la primera versión:
+   *
+   *   1. YA NO SE EXIGE STOCK. Antes, si el sistema marcaba 0, esto respondía
+   *      "no hay stock físico de esta prenda" y la caja no podía cobrar algo
+   *      que el cliente ya tenía en la mano. La caja vende en cero a propósito:
+   *      el negativo es el aviso de que falta un ingreso y el conteo lo cuadra.
+   *
+   *   2. TAMBIÉN RESUELVE EL CÓDIGO DE LA MERCADERÍA. La ropa comprada ya hecha
+   *      no tiene etiqueta de producción (StockPrenda): lleva el código corto
+   *      en el propio producto. Antes escanearla fallaba con "no existe".
+   */
+  async buscarPorCodigoEscaner(codigo: string, bodegaId?: number) {
+    // 1. Etiqueta de producción (la que imprimimos con color y talla)
     const prendaEscaneada = await this.prisma.stockPrenda.findUnique({
       where: { skuBarras: codigo },
-      include: { 
-        producto: true // Traemos el nombre y detalles base
-      }
+      include: { producto: true },
     });
 
-    if (!prendaEscaneada) {
-      throw new BadRequestException(`El código escaneado (${codigo}) no existe en el sistema.`);
+    let productoId: number;
+    let nombre: string;
+    let color: string;
+    let talla: string;
+
+    if (prendaEscaneada) {
+      productoId = prendaEscaneada.productoId;
+      nombre = prendaEscaneada.producto.nombre;
+      color = prendaEscaneada.color;
+      talla = prendaEscaneada.talla;
+    } else {
+      // 2. Código corto de la mercadería comprada (vive en el producto)
+      const producto = await this.prisma.producto.findFirst({
+        where: { codigoBarras: codigo },
+      });
+      if (!producto) {
+        throw new BadRequestException(
+          `El código escaneado (${codigo}) no existe en el sistema.`,
+        );
+      }
+      productoId = producto.id;
+      nombre = producto.nombre;
+      color = COLOR_GENERAL;
+      talla = TALLA_UNICA;
     }
 
-    // 2. Buscamos el stock físico real para asegurar que hay prendas disponibles
+    // 3. Cuánto registra el sistema. Si no hay fila, la prenda nunca entró al
+    //    almacén: se vende igual y se avisa con sinRegistrar.
     const inventarioFisico = await this.prisma.inventarioTerminado.findFirst({
       where: {
-        productoId: prendaEscaneada.productoId,
-        color: prendaEscaneada.color,
-        talla: prendaEscaneada.talla,
-        stock: { gt: 0 } // Que tenga al menos 1 en stock
-      }
+        productoId,
+        color,
+        talla,
+        ...(bodegaId ? { bodegaId: Number(bodegaId) } : {}),
+      },
+      orderBy: { stock: 'desc' },
     });
 
-    if (!inventarioFisico) {
-      throw new BadRequestException(`El código existe, pero no hay stock físico de esta prenda (${prendaEscaneada.color} - ${prendaEscaneada.talla}).`);
-    }
-
-    // 3. Devolvemos el "molde" exacto que su Carrito de Ventas necesita
     return {
-      productoId: prendaEscaneada.productoId,
-      nombre: prendaEscaneada.producto.nombre,
-      color: prendaEscaneada.color,
-      talla: prendaEscaneada.talla,
-      stockDisponible: inventarioFisico.stock,
-      bodegaId: inventarioFisico.bodegaId
+      productoId,
+      nombre,
+      color,
+      talla,
+      stockDisponible: Number(inventarioFisico?.stock ?? 0),
+      bodegaId: inventarioFisico?.bodegaId ?? (bodegaId ? Number(bodegaId) : null),
+      // true = el almacén todavía no conoce esta prenda en esa variante
+      sinRegistrar: !inventarioFisico,
     };
   }
 
