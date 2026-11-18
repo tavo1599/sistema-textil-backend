@@ -154,13 +154,10 @@ export class MercaderiaService {
     }[];
   }) {
     // ---------------- Validaciones con mensajes entendibles ----------------
-    const factura = String(data.numeroFactura || '').trim().toUpperCase();
-    if (!factura) {
-      throw new BadRequestException('Escribe el número de la factura o boleta de compra.');
-    }
-    if (!data.bodegaDestinoId) {
-      throw new BadRequestException('Elige a qué bodega entra la mercadería.');
-    }
+    // El número de boleta/factura es OPCIONAL: si no lo ponen, generamos un
+    // correlativo interno único para que la compra igual quede registrada.
+    const facturaManual = String(data.numeroFactura || '').trim().toUpperCase();
+    const factura = facturaManual || `S/B-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
     const items = (data.items || [])
       .map((i) => ({
@@ -183,21 +180,33 @@ export class MercaderiaService {
       }
     }
 
-    // La factura duplicada casi siempre es doble registro por error.
-    // Mejor frenarlo aquí que descubrir el stock inflado un mes después.
-    const yaExiste = await this.prisma.compra.findUnique({ where: { correlativo: factura } });
-    if (yaExiste) {
-      throw new ConflictException(
-        `La factura ${factura} ya está registrada (compra #${yaExiste.id}). ` +
-          'Si de verdad es otra compra, agrégale un sufijo: por ejemplo ' +
-          `${factura}-2.`,
-      );
+    // La factura duplicada casi siempre es doble registro por error — pero solo
+    // tiene sentido avisar cuando el usuario SÍ escribió una (las autogeneradas
+    // son únicas).
+    if (facturaManual) {
+      const yaExiste = await this.prisma.compra.findUnique({ where: { correlativo: factura } });
+      if (yaExiste) {
+        throw new ConflictException(
+          `La factura ${factura} ya está registrada (compra #${yaExiste.id}). ` +
+            'Si de verdad es otra compra, agrégale un sufijo: por ejemplo ' +
+            `${factura}-2.`,
+        );
+      }
     }
 
-    const bodega = await this.prisma.bodega.findUnique({
-      where: { id: Number(data.bodegaDestinoId) },
-    });
-    if (!bodega) throw new NotFoundException('La bodega de destino no existe.');
+    // La bodega de destino también es opcional: si no la eligen, entra a la
+    // bodega Principal (o a la primera que haya).
+    let bodega = data.bodegaDestinoId
+      ? await this.prisma.bodega.findUnique({ where: { id: Number(data.bodegaDestinoId) } })
+      : null;
+    if (!bodega) {
+      bodega =
+        (await this.prisma.bodega.findFirst({ where: { tipo: 'Principal', estado: true } })) ||
+        (await this.prisma.bodega.findFirst({ where: { estado: true } })) ||
+        (await this.prisma.bodega.findFirst());
+    }
+    if (!bodega) throw new NotFoundException('No hay ninguna bodega registrada para recibir la mercadería.');
+    data.bodegaDestinoId = bodega.id;
 
     // ------------------------------- Transacción -------------------------------
     return this.prisma.$transaction(async (tx) => {
