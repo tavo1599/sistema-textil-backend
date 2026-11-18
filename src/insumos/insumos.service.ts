@@ -207,18 +207,45 @@ export class InsumosService {
   }
 
   // 5. ELIMINAR
-async remove(id: number) {
-  try {
-    await this.findOne(id); // Verificamos que exista
-    return await this.prisma.insumo.delete({ where: { id } });
-  } catch (error: any) {
-    // Si el error es de Prisma P2003 (Foreign key constraint failed)
-    if (error.code === 'P2003') {
+  // Un insumo NO se podía borrar porque, al registrarlo, se le crea un
+  // movimiento de kardex (el ingreso inicial), y esa llave foránea frenaba el
+  // DELETE (P2003). El caso real: se registró algo por error (ej. rollos de
+  // tela que iban al Almacén de Rollos, no a Insumos) y hay que poder sacarlo.
+  //
+  // Ahora: si el insumo NO está usado de verdad (fichas técnicas, compras,
+  // rollos o envíos a acabados), se borra junto con su historial de
+  // movimientos. Si SÍ está usado en algo que se rompería, se avisa exactamente
+  // en qué y no se borra.
+  async remove(id: number) {
+    const insumo = await this.prisma.insumo.findUnique({ where: { id } });
+    if (!insumo) throw new NotFoundException(`No existe el insumo #${id}.`);
+
+    const [boms, compras, rollos, avios] = await Promise.all([
+      this.prisma.productoBom.count({ where: { insumoId: id } }),
+      this.prisma.compraDetalle.count({ where: { insumoId: id } }),
+      this.prisma.rolloTela.count({ where: { insumoId: id } }),
+      this.prisma.transformacionAvio.count({ where: { insumoId: id } }),
+    ]);
+
+    const usos: string[] = [];
+    if (boms) usos.push(`${boms} ficha(s) técnica(s)`);
+    if (compras) usos.push(`${compras} compra(s) registrada(s)`);
+    if (rollos) usos.push(`${rollos} rollo(s) de tela`);
+    if (avios) usos.push(`${avios} envío(s) a acabados`);
+
+    if (usos.length > 0) {
       throw new BadRequestException(
-        'No se puede eliminar: Este insumo ya está siendo usado en una Ficha Técnica o en una Orden de Producción.'
+        `No se puede eliminar "${insumo.nombre}": está usado en ${usos.join(', ')}. ` +
+          'Si quieres sacarlo del almacén sin borrarlo, ajústale el stock a 0.',
       );
     }
-    throw error;
+
+    // Seguro de borrar: limpiamos su kardex (que es lo único que lo referencia)
+    // y lo eliminamos.
+    return this.prisma.$transaction(async (tx) => {
+      await tx.movimientoInsumo.deleteMany({ where: { insumoId: id } });
+      await tx.insumo.delete({ where: { id } });
+      return { mensaje: `Insumo "${insumo.nombre}" eliminado.` };
+    });
   }
-}
 }
