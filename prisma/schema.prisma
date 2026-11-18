@@ -267,6 +267,7 @@ model Insumo {
   detallesCompra CompraDetalle[]
   movimientos    MovimientoInsumo[]
   rollos         RolloTela[]
+  avios          TransformacionAvio[]
 }
 
 model ProveedorTaller {
@@ -863,11 +864,16 @@ model Transformacion {
   codigo String   @unique // 'TR-2026-0001'
   fecha  DateTime @default(now())
 
-  // EN_PROCESO = cortado y en el taller
-  // RECIBIDO   = volvió terminado y ya entró a almacén de terminados
-  // PARCIAL    = volvió solo una parte
-  // ANULADO    = se revirtió (la tela vuelve a los rollos)
+  // EN_PROCESO   = cortado y en el taller
+  // EN_ACABADOS  = volvió del taller (con conteo) y está en acabados; ya se le
+  //                mandaron avíos (bolsas/hangtags) desde Almacén de Insumos
+  // RECIBIDO     = volvió terminado y ya entró a almacén de terminados
+  // PARCIAL      = volvió solo una parte
+  // ANULADO      = se revirtió (la tela vuelve a los rollos)
   estado String @default("EN_PROCESO")
+
+  // Cuándo pasó a acabados (null = todavía en el taller).
+  enAcabadosDesde DateTime?
 
   cortador    String? // quién cortó
   observacion String?
@@ -890,9 +896,27 @@ model Transformacion {
 
   rollos   TransformacionRollo[]
   detalles TransformacionDetalle[]
+  avios    TransformacionAvio[]
 
   @@index([estado])
   @@index([fecha])
+}
+
+/// Los avíos (bolsas, hangtags, etc.) que se mandaron a acabados para ESTE
+/// corte. Se descuentan del Almacén de Insumos al pasar a acabados. Su costo
+/// NO se suma al costo de la prenda: es solo el registro de qué se consumió.
+model TransformacionAvio {
+  id            Int     @id @default(autoincrement())
+  cantidad      Decimal @db.Decimal(12, 4)
+  costoUnitario Decimal @default(0.0000) @db.Decimal(12, 4) // congelado al consumir
+
+  transformacionId Int
+  transformacion   Transformacion @relation(fields: [transformacionId], references: [id], onDelete: Cascade)
+
+  insumoId Int
+  insumo   Insumo @relation(fields: [insumoId], references: [id])
+
+  @@index([transformacionId])
 }
 
 /// Qué rollo y cuántos kilos entraron en este corte.
@@ -916,7 +940,8 @@ model TransformacionDetalle {
   color            String
   talla            String
   cantidad         Int    @default(0) // cortadas / planificadas
-  cantidadRecibida Int    @default(0) // recibidas del taller
+  cantidadAcabados Int    @default(0) // contadas al volver del taller (entran a acabados)
+  cantidadRecibida Int    @default(0) // contadas al final (entran al almacén)
 
   transformacionId Int
   transformacion   Transformacion @relation(fields: [transformacionId], references: [id], onDelete: Cascade)

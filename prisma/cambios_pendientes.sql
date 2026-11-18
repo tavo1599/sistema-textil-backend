@@ -268,3 +268,37 @@ CREATE TABLE IF NOT EXISTS "UsuarioBodega" (
 CREATE UNIQUE INDEX IF NOT EXISTS "UsuarioBodega_usuarioId_bodegaId_key" ON "UsuarioBodega"("usuarioId", "bodegaId");
 CREATE INDEX IF NOT EXISTS "UsuarioBodega_usuarioId_idx" ON "UsuarioBodega"("usuarioId");
 CREATE INDEX IF NOT EXISTS "UsuarioBodega_bodegaId_idx" ON "UsuarioBodega"("bodegaId");
+
+
+-- ===========================================================================
+-- BLOQUE K · ETAPA ACABADOS EN TRANSFORMACIÓN + AVÍOS
+-- ---------------------------------------------------------------------------
+-- El recorrido del corte ahora tiene un paso más:
+--   EN_PROCESO (taller) -> [conteo del taller + avíos] -> EN_ACABADOS ->
+--   [conteo final] -> RECIBIDO (almacén)
+--
+--  · Transformacion.enAcabadosDesde: cuándo pasó a acabados (null = en taller).
+--  · TransformacionDetalle.cantidadAcabados: lo contado al volver del taller.
+--  · TransformacionAvio: los avíos (bolsas, hangtags) que se mandaron a
+--    acabados, descontados del Almacén de Insumos. Su costo NO afecta a la
+--    prenda: es solo el registro de lo consumido.
+--
+-- Todo ADITIVO. Las llaves foráneas van DENTRO del CREATE TABLE (regla 5).
+-- ===========================================================================
+ALTER TABLE "Transformacion" ADD COLUMN IF NOT EXISTS "enAcabadosDesde" TIMESTAMP(3);
+
+ALTER TABLE "TransformacionDetalle" ADD COLUMN IF NOT EXISTS "cantidadAcabados" INTEGER NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS "TransformacionAvio" (
+  "id"               SERIAL PRIMARY KEY,
+  "cantidad"         DECIMAL(12,4) NOT NULL,
+  "costoUnitario"    DECIMAL(12,4) NOT NULL DEFAULT 0,
+  "transformacionId" INTEGER NOT NULL,
+  "insumoId"         INTEGER NOT NULL,
+  CONSTRAINT "TransformacionAvio_transformacionId_fkey" FOREIGN KEY ("transformacionId")
+    REFERENCES "Transformacion"("id") ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT "TransformacionAvio_insumoId_fkey" FOREIGN KEY ("insumoId")
+    REFERENCES "Insumo"("id") ON DELETE RESTRICT ON UPDATE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS "TransformacionAvio_transformacionId_idx" ON "TransformacionAvio"("transformacionId");

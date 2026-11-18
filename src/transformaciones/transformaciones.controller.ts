@@ -51,7 +51,13 @@ export class TransformacionesController {
     return this.servicio.crear(body);
   }
 
-  /** Paso 2: el taller devuelve la producción → las prendas entran al almacén. */
+  /** Paso 1b: vuelve del taller → se cuenta y se le mandan avíos; pasa a acabados. */
+  @Patch(':id/acabados')
+  pasarAAcabados(@Param('id') id: string, @Body() body: any) {
+    return this.servicio.pasarAAcabados(Number(id), body);
+  }
+
+  /** Paso 2: el conteo final → las prendas entran al almacén de terminados. */
   @Patch(':id/recibir')
   recibir(@Param('id') id: string, @Body() body: any) {
     return this.servicio.recibir(Number(id), body);

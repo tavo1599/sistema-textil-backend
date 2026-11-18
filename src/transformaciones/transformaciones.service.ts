@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { PrismaService } from '../prisma/prisma.service';
 import { recalcularCierreRollos } from '../rollos/cierre-rollos';
 import { KardexService } from '../kardex/kardex.service';
+import { InsumoKardexService } from '../kardex/insumo-kardex.service';
 
 /**
  * TransformacionesService — DE ROLLOS DE TELA A PRENDAS
@@ -35,6 +36,7 @@ export class TransformacionesService {
   constructor(
     private prisma: PrismaService,
     private kardex: KardexService,
+    private insumoKardex: InsumoKardexService,
   ) {}
 
   // =========================================================================
@@ -207,6 +209,120 @@ export class TransformacionesService {
   }
 
   // =========================================================================
+  // 1b. PASAR A ACABADOS
+  // -------------------------------------------------------------------------
+  // El corte vuelve del taller. Aquí se CUENTA lo que regresó (primer conteo) y
+  // se le mandan los AVÍOS (bolsas, hangtags…) que se descuentan del Almacén de
+  // Insumos. La transformación pasa de EN_PROCESO a EN_ACABADOS.
+  //
+  // El costo de los avíos NO se suma al costo de la prenda (decisión del
+  // negocio): solo se descuenta de Insumos y se deja el registro en
+  // TransformacionAvio para poder auditar qué se usó.
+  // =========================================================================
+  async pasarAAcabados(
+    id: number,
+    data: {
+      // Conteo de lo que volvió del taller (color × talla).
+      conteo: { color: string; talla: string; cantidad: number }[];
+      // Avíos a descontar del almacén de insumos.
+      avios?: { insumoId: number; cantidad: number }[];
+    },
+  ) {
+    const conteo = (data.conteo || [])
+      .map((c) => ({ color: String(c.color), talla: String(c.talla), cantidad: Math.trunc(Number(c.cantidad)) }))
+      .filter((c) => c.color && c.talla && c.cantidad > 0);
+
+    if (conteo.length === 0) {
+      throw new BadRequestException('Cuenta cuántas prendas volvieron del taller.');
+    }
+
+    const avios = (data.avios || [])
+      .map((a) => ({ insumoId: Number(a.insumoId), cantidad: Number(a.cantidad) }))
+      .filter((a) => a.insumoId && a.cantidad > 0);
+
+    return this.prisma.$transaction(async (tx) => {
+      const transformacion = await tx.transformacion.findUnique({
+        where: { id },
+        include: { detalles: true, producto: { select: { nombre: true } } },
+      });
+      if (!transformacion) throw new NotFoundException(`No existe la transformación #${id}.`);
+      if (transformacion.estado === 'ANULADO') {
+        throw new BadRequestException('Esta transformación está anulada.');
+      }
+      if (transformacion.estado === 'RECIBIDO') {
+        throw new BadRequestException('Esta transformación ya entró al almacén.');
+      }
+
+      // ---- Primer conteo: lo que volvió del taller ----
+      for (const c of conteo) {
+        const detalle = transformacion.detalles.find(
+          (d) => d.color === c.color && d.talla === c.talla,
+        );
+        if (detalle) {
+          await tx.transformacionDetalle.update({
+            where: { id: detalle.id },
+            data: { cantidadAcabados: c.cantidad },
+          });
+        } else {
+          // Volvió una combinación que no estaba en el corte: la aceptamos.
+          await tx.transformacionDetalle.create({
+            data: {
+              transformacionId: id,
+              color: c.color,
+              talla: c.talla,
+              cantidad: 0,
+              cantidadAcabados: c.cantidad,
+            },
+          });
+        }
+      }
+
+      // ---- Avíos: se descuentan del Almacén de Insumos ----
+      const aviosRegistrados: any[] = [];
+      for (const a of avios) {
+        const insumo = await tx.insumo.findUnique({ where: { id: a.insumoId } });
+        if (!insumo) throw new NotFoundException(`No existe el insumo #${a.insumoId}.`);
+        const costoUnitario = Number(insumo.costoUnitario);
+
+        // Descuenta del stock + deja el movimiento en el kardex de insumos.
+        // (registrarSalida lanza si no hay stock suficiente.)
+        await this.insumoKardex.registrarSalida(tx, {
+          insumoId: a.insumoId,
+          cantidad: a.cantidad,
+          costoUnitario,
+          motivo: `Avíos a acabados — ${transformacion.codigo}`,
+          tipoMovimiento: 'SALIDA',
+          referenciaId: transformacion.id,
+        });
+
+        await tx.transformacionAvio.create({
+          data: {
+            transformacionId: id,
+            insumoId: a.insumoId,
+            cantidad: a.cantidad,
+            costoUnitario,
+          },
+        });
+        aviosRegistrados.push({ insumoId: a.insumoId, nombre: insumo.nombre, cantidad: a.cantidad });
+      }
+
+      const prendasAcabados = conteo.reduce((s, c) => s + c.cantidad, 0);
+
+      const actualizada = await tx.transformacion.update({
+        where: { id },
+        data: { estado: 'EN_ACABADOS', enAcabadosDesde: new Date() },
+        include: { detalles: true, avios: true, producto: { select: { nombre: true } } },
+      });
+
+      return {
+        ...actualizada,
+        prendasAcabados,
+        aviosRegistrados,
+      };
+    });
+  }
+
+  // =========================================================================
   // 2. RECIBIR LA PRODUCCIÓN TERMINADA → ENTRA A ALMACÉN DE TERMINADOS
   // =========================================================================
   async recibir(
@@ -262,12 +378,17 @@ export class TransformacionesService {
         );
 
         if (detalle) {
-          const pendiente = detalle.cantidad - detalle.cantidadRecibida;
+          // Si el corte pasó por acabados, la meta es lo que se contó al entrar
+          // a acabados (la merma del taller ya no cuenta como pendiente); si no,
+          // la meta son las cortadas (flujo directo de siempre).
+          const pasoPorAcabados = !!transformacion.enAcabadosDesde;
+          const meta = pasoPorAcabados ? detalle.cantidadAcabados : detalle.cantidad;
+          const pendiente = meta - detalle.cantidadRecibida;
           if (r.cantidad > pendiente) {
             throw new BadRequestException(
-              `${transformacion.producto.nombre} ${r.color}/${r.talla}: se cortaron ` +
-                `${detalle.cantidad} y ya se recibieron ${detalle.cantidadRecibida}. ` +
-                `No puedes recibir ${r.cantidad} más (quedan ${pendiente}).`,
+              `${transformacion.producto.nombre} ${r.color}/${r.talla}: ` +
+                `${pasoPorAcabados ? 'pasaron a acabados' : 'se cortaron'} ${meta} y ya se ` +
+                `recibieron ${detalle.cantidadRecibida}. No puedes recibir ${r.cantidad} más (quedan ${pendiente}).`,
             );
           }
           await tx.transformacionDetalle.update({
@@ -307,7 +428,11 @@ export class TransformacionesService {
       const detallesFinales = await tx.transformacionDetalle.findMany({
         where: { transformacionId: id },
       });
-      const cortadas = detallesFinales.reduce((s, d) => s + d.cantidad, 0);
+      const pasoPorAcabados = !!transformacion.enAcabadosDesde;
+      const objetivo = detallesFinales.reduce(
+        (s, d) => s + (pasoPorAcabados ? d.cantidadAcabados : d.cantidad),
+        0,
+      );
       const llegadas = detallesFinales.reduce((s, d) => s + d.cantidadRecibida, 0);
 
       const actualizada = await tx.transformacion.update({
@@ -315,7 +440,7 @@ export class TransformacionesService {
         data: {
           prendasRecibidas: llegadas,
           bodegaDestinoId: Number(data.bodegaDestinoId),
-          estado: llegadas >= cortadas ? 'RECIBIDO' : 'PARCIAL',
+          estado: llegadas >= objetivo ? 'RECIBIDO' : 'PARCIAL',
         },
         include: { detalles: true, producto: { select: { nombre: true } } },
       });
@@ -424,6 +549,7 @@ export class TransformacionesService {
         taller: { select: { id: true, razonSocial: true } },
         detalles: true,
         rollos: { include: { rollo: { select: { codigo: true, color: true } } } },
+        avios: { include: { insumo: { select: { id: true, nombre: true, unidadMedida: true } } } },
       },
       orderBy: { fecha: 'desc' },
       take: 300,
@@ -438,6 +564,7 @@ export class TransformacionesService {
         taller: { select: { id: true, razonSocial: true } },
         detalles: { orderBy: [{ color: 'asc' }, { talla: 'asc' }] },
         rollos: { include: { rollo: true } },
+        avios: { include: { insumo: { select: { id: true, nombre: true, unidadMedida: true } } } },
       },
     });
     if (!t) throw new NotFoundException(`No existe la transformación #${id}.`);
