@@ -52,6 +52,7 @@ const TABLAS_ESPERADAS = [
   'Transformacion',
   'TransformacionRollo',
   'TransformacionDetalle',
+  'UsuarioBodega',
 ];
 
 // ---------------------------------------------------------------------------

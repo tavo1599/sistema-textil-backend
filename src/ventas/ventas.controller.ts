@@ -2,11 +2,16 @@ import { Controller, Post, Patch, Body, Get, Param, Query, Req, UseGuards } from
 import { VentasService } from './ventas.service';
 import { CreateVentaDto } from './dto/create-venta.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { PrismaService } from '../prisma/prisma.service';
+import { bodegasDelUsuario, filtroBodega } from '../common/bodegas-usuario';
 
 @UseGuards(JwtAuthGuard) // Requiere login (el vendedor registra ventas)
 @Controller('ventas')
 export class VentasController {
-  constructor(private readonly ventasService: VentasService) {}
+  constructor(
+    private readonly ventasService: VentasService,
+    private readonly prisma: PrismaService,
+  ) {}
 
   // ========================================================
   // 1. ENDPOINT DE VENTAS (El que consume la Laptop/Caja)
@@ -25,9 +30,17 @@ export class VentasController {
     return this.ventasService.obtenerDespachosPendientes();
   }
 
- @Get('reporte-general')
-  obtenerReporteGeneral(@Query('fecha') fecha?: string) {
-    return this.ventasService.obtenerReporteGeneral(fecha);
+ // Las ventas que el usuario puede ver: limitadas a sus bodegas (todas para el
+  // ADMIN o quien no tenga asignación). ?bodegaId para ver un almacén puntual.
+  @Get('reporte-general')
+  async obtenerReporteGeneral(
+    @Req() req: any,
+    @Query('fecha') fecha?: string,
+    @Query('bodegaId') bodegaId?: string,
+  ) {
+    const permitidas = await bodegasDelUsuario(this.prisma, req.user);
+    const filtro = filtroBodega(permitidas, bodegaId ? Number(bodegaId) : undefined);
+    return this.ventasService.obtenerReporteGeneral(fecha, filtro);
   }
 
   /**

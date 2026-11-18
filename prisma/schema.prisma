@@ -445,6 +445,11 @@ model Usuario {
   rol      String      @default("USER") // "ADMIN" o "USER"
   logs     Auditoria[]
   ventas   Venta[] // ventas registradas por este usuario
+
+  // Almacenes (bodegas) que puede ver este usuario. Si no tiene ninguno
+  // asignado, ve todos (compatibilidad con los usuarios de antes). El ADMIN
+  // siempre ve todos. Ver UsuarioBodega.
+  bodegas  UsuarioBodega[]
 }
 
 model Auditoria {
@@ -482,6 +487,23 @@ model Bodega {
   inventarios InventarioTerminado[]
   ventas      Venta[]
   movimientos MovimientoInventario[]
+  usuarios    UsuarioBodega[]
+}
+
+/// Qué almacenes (bodegas) puede ver cada usuario. Un usuario con filas aquí
+/// solo ve esas bodegas en Caja, Ventas, Inventario y Reportes; sin filas, ve
+/// todas. El ADMIN siempre ve todas, tenga o no filas.
+model UsuarioBodega {
+  id        Int @id @default(autoincrement())
+  usuarioId Int
+  bodegaId  Int
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  bodega  Bodega  @relation(fields: [bodegaId], references: [id], onDelete: Cascade)
+
+  @@unique([usuarioId, bodegaId])
+  @@index([usuarioId])
+  @@index([bodegaId])
 }
 
 model InventarioTerminado {

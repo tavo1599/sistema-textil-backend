@@ -262,18 +262,20 @@ export class VentasService {
   // ========================================================
   // 🟢 NUEVA FUNCIÓN PARA EL DASHBOARD DE VUE
   // ========================================================
-  async obtenerReporteGeneral(fecha?: string) {
+  async obtenerReporteGeneral(fecha?: string, bodegasPermitidas?: number[] | null) {
     // Si mandan una fecha (YYYY-MM-DD) filtramos ese día; si no, las últimas 50
-    let filtroFecha: any = {};
+    const where: any = {};
     if (fecha) {
       const desde = new Date(`${fecha}T00:00:00`);
       const hasta = new Date(`${fecha}T00:00:00`);
       hasta.setHours(23, 59, 59, 999);
-      filtroFecha = { fecha: { gte: desde, lte: hasta } };
+      where.fecha = { gte: desde, lte: hasta };
     }
+    // Limitar a las bodegas que el usuario puede ver (null = todas).
+    if (bodegasPermitidas) where.bodegaId = { in: bodegasPermitidas };
 
     const ventasBD = await this.prisma.venta.findMany({
-      where: filtroFecha,
+      where,
       orderBy: { fecha: 'desc' },
       ...(fecha ? {} : { take: 50 }),
       include: {

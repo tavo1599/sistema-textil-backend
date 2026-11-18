@@ -6,8 +6,10 @@ export class AlmacenTerminadosService {
   constructor(private prisma: PrismaService) {}
 
   // --- BODEGAS ---
-  async getBodegas() {
-    return this.prisma.bodega.findMany();
+  async getBodegas(bodegasPermitidas?: number[] | null) {
+    return this.prisma.bodega.findMany({
+      where: bodegasPermitidas ? { id: { in: bodegasPermitidas } } : {},
+    });
   }
 
   async createBodega(data: { nombre: string; tipo: string; direccion?: string }) {
@@ -22,8 +24,9 @@ export class AlmacenTerminadosService {
   }
 
   // --- INVENTARIO (KARDEX) ---
-  async getInventario() {
+  async getInventario(bodegasPermitidas?: number[] | null) {
     return this.prisma.inventarioTerminado.findMany({
+      where: bodegasPermitidas ? { bodegaId: { in: bodegasPermitidas } } : {},
       include: {
         producto: true,
         bodega: true

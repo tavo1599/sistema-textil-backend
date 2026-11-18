@@ -12,10 +12,37 @@ export class UsuariosService {
 
   // Listar todos (nunca devolvemos el password)
   async findAll() {
-    return this.prisma.usuario.findMany({
-      select: { id: true, email: true, nombre: true, rol: true },
+    const usuarios = await this.prisma.usuario.findMany({
+      select: {
+        id: true,
+        email: true,
+        nombre: true,
+        rol: true,
+        bodegas: { select: { bodegaId: true } },
+      },
       orderBy: { id: 'asc' },
     });
+    // Aplanamos a una lista de ids, que es lo que la pantalla usa.
+    return usuarios.map((u) => ({
+      id: u.id,
+      email: u.email,
+      nombre: u.nombre,
+      rol: u.rol,
+      bodegaIds: u.bodegas.map((b) => b.bodegaId),
+    }));
+  }
+
+  // Reemplaza el conjunto de bodegas de un usuario por el que llega (idempotente).
+  private async fijarBodegas(usuarioId: number, bodegaIds: any) {
+    if (!Array.isArray(bodegaIds)) return; // undefined = no tocar
+    const ids = [...new Set(bodegaIds.map((x: any) => Number(x)).filter((x: number) => x > 0))];
+    await this.prisma.usuarioBodega.deleteMany({ where: { usuarioId } });
+    if (ids.length > 0) {
+      await this.prisma.usuarioBodega.createMany({
+        data: ids.map((bodegaId) => ({ usuarioId, bodegaId })),
+        skipDuplicates: true,
+      });
+    }
   }
 
   // Crear usuario con contraseña hasheada
@@ -35,6 +62,8 @@ export class UsuariosService {
     const usuario = await this.prisma.usuario.create({
       data: { email: data.email, nombre: data.nombre, password: passwordHashed, rol },
     });
+
+    await this.fijarBodegas(usuario.id, data.bodegaIds);
 
     return { id: usuario.id, email: usuario.email, nombre: usuario.nombre, rol: usuario.rol };
   }
@@ -59,6 +88,9 @@ export class UsuariosService {
     }
 
     const actualizado = await this.prisma.usuario.update({ where: { id }, data: dataUpdate });
+
+    await this.fijarBodegas(id, data.bodegaIds);
+
     return { id: actualizado.id, email: actualizado.email, nombre: actualizado.nombre, rol: actualizado.rol };
   }
 
