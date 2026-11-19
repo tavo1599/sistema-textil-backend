@@ -92,7 +92,36 @@ export class ProductosService {
   }
 
   async findAll() {
-    return this.prisma.producto.findMany({ orderBy: { id: 'desc' } });
+    const productos = await this.prisma.producto.findMany({ orderBy: { id: 'desc' } });
+
+    // Para la mercadería comprada, adjuntamos el PROVEEDOR de su última compra.
+    // Así la caja puede mostrar de quién vino cada prenda comprada. La
+    // producción propia (esMercaderia = false) no tiene proveedor: queda null.
+    const idsMercaderia = productos.filter((p) => p.esMercaderia).map((p) => p.id);
+    const proveedorPorProducto: Record<number, string> = {};
+
+    if (idsMercaderia.length > 0) {
+      const detalles = await this.prisma.compraDetalle.findMany({
+        where: { productoId: { in: idsMercaderia } },
+        orderBy: { id: 'desc' }, // el id más alto = la compra más reciente
+        select: {
+          productoId: true,
+          compra: { select: { proveedor: { select: { razonSocial: true } } } },
+        },
+      });
+      for (const d of detalles) {
+        const pid = d.productoId;
+        const nombre = d.compra?.proveedor?.razonSocial;
+        if (pid && nombre && !proveedorPorProducto[pid]) {
+          proveedorPorProducto[pid] = nombre; // el primero que vemos = el más reciente
+        }
+      }
+    }
+
+    return productos.map((p) => ({
+      ...p,
+      proveedorNombre: proveedorPorProducto[p.id] || null,
+    }));
   }
 
   async findOne(id: number) {
